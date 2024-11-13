@@ -1,0 +1,15 @@
+/target
+cargo.lock
+
+
+contracts/cache/
+contracts/lib/
+
+contracts/!/broadcast
+contracts/broadcast/*/31337/
+contracts/broadcast/**/dry-run/
+
+contracts/docs/
+
+.env
+

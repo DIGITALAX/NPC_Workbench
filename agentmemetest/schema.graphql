@@ -1,0 +1,11 @@
+type AgentMemeDeployed @entity(immutable: true) {
+  id: Bytes!
+  admin: Bytes! # address
+  accessControlAddress: Bytes! # address
+  fhe: Bytes! # address
+  data: Bytes! # address
+  token: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}

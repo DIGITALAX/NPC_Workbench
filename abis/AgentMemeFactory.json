@@ -1,0 +1,72 @@
+[
+  {
+    "type": "function",
+    "name": "deployFromFactory",
+    "inputs": [
+      {
+        "name": "agentWriters",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "agentReaders",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "agentAdmins",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "agentTokenDistributors",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      { "name": "tokenName", "type": "string", "internalType": "string" },
+      { "name": "tokenSymbol", "type": "string", "internalType": "string" },
+      { "name": "tokenSupply", "type": "uint256", "internalType": "uint256" }
+    ],
+    "outputs": [
+      { "name": "", "type": "address[4]", "internalType": "address[4]" }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "AgentMemeDeployed",
+    "inputs": [
+      {
+        "name": "admin",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "accessControlAddress",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "fhe",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  }
+]
