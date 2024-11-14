@@ -2,15 +2,20 @@
 pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "./AgentMemeAccessControls.sol";
+import "./../AgentMemeAccessControls.sol";
+import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
-contract AgentMemeERC20 is ERC20 {
-    uint256 public immutable tokenSupply; 
+contract AgentMemeERC20 is ERC20, Initializable {
+    uint256 public tokenSupply;
     AgentMemeAccessControls public accessControls;
-    uint256 public totalMinted; 
+    uint256 public totalMinted;
+    string private _tokenName;
+    string private _tokenSymbol;
+        bool public initialized;
 
     error InvalidAgentRole();
     error ExceedsTotalSupply();
+    error AlreadyInitialized();
 
     modifier OnlyAgentOrAdmin() {
         if (
@@ -22,15 +27,23 @@ contract AgentMemeERC20 is ERC20 {
         _;
     }
 
-    constructor(
-        string memory name,
-        string memory symbol,
+    function initialize(
+        string memory tokenName,
+        string memory tokenSymbol,
         address accessControlsAddress,
         uint256 supply
-    ) ERC20(name, symbol) {
+    ) external {
+        if (initialized) {
+            revert AlreadyInitialized();
+        }
+        _tokenName = tokenName;
+        _tokenSymbol = tokenSymbol;
         tokenSupply = supply;
+        initialized = true;
         accessControls = AgentMemeAccessControls(accessControlsAddress);
     }
+
+    constructor() ERC20("", "") {}
 
     function mintandDistributeToken(
         address to,
@@ -41,5 +54,13 @@ contract AgentMemeERC20 is ERC20 {
         }
         totalMinted += amount;
         _mint(to, amount);
+    }
+
+    function name() public view override returns (string memory) {
+        return _tokenName;
+    }
+
+    function symbol() public view override returns (string memory) {
+        return _tokenSymbol;
     }
 }

@@ -8,7 +8,10 @@ authors = ["Emma-Jane"]
 repository = "https://github.com/digitalax/"
 
 [dependencies]
+chrono = "0.4.38"
 dotenv = "0.15.0"
 ethers = {version ="2.0.14", features = ["abigen", "etherscan"]}
+reqwest = { version = "0.12.9", features = ["json"]}
 serde_json = "1.0.132"
 tokio = {version ="1.41.1", features = ["full"]}
+uuid = { version ="1.11.0", features = ["v4"] }

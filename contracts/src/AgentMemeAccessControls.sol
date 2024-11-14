@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
+import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
-contract AgentMemeAccessControls {
+contract AgentMemeAccessControls is Initializable {
     address private _admin;
+    bool public initialized;
     mapping(address => bool) private _agentWriters;
     mapping(address => bool) private _agentAdmins;
     mapping(address => bool) private _humanWriters;
@@ -15,6 +17,7 @@ contract AgentMemeAccessControls {
 
     error OnlyAdmin();
     error AdminCantBeZero();
+    error AlreadyInitialized();
 
     modifier onlyAdmin() {
         if (msg.sender != _admin) {
@@ -30,14 +33,18 @@ contract AgentMemeAccessControls {
         _;
     }
 
-    constructor(
+    function initialize(
         address admin,
         address[] memory agentWriters,
         address[] memory agentReaders,
         address[] memory agentAdmins,
         address[] memory agentTokenDistributors
-    ) {
+    ) external {
+        if (initialized) {
+            revert AlreadyInitialized();
+        }
         _admin = admin;
+        initialized = true;
 
         for (uint256 i = 0; i < agentWriters.length; i++) {
             _agentWriters[agentWriters[i]] = true;
