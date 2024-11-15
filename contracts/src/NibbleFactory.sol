@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./NibbleLibrary.sol";
-import "./NibbleAdapters.sol";
+import "./NibbleConnectors.sol";
 import "./NibbleConditions.sol";
 import "./NibbleListeners.sol";
 import "./NibbleEvaluations.sol";
@@ -18,7 +18,7 @@ contract NibbleFactory {
     address public agentsImplementation;
     address public storageImplementation;
     address public evaluationsImplementation;
-    address public adaptersImplementation;
+    address public connectorsImplementation;
     address public accessControlsImplementation;
     mapping(address => NibbleLibrary.Nibble[]) private _nibbles;
     mapping(address => uint256) private _nibbleCount;
@@ -29,7 +29,7 @@ contract NibbleFactory {
         address conditionsContract,
         address evaluationsContract,
         address agentsContract,
-        address adaptersContract,
+        address connectorsContract,
         address accessControlsContract,
         bytes id,
         uint256 count
@@ -41,7 +41,7 @@ contract NibbleFactory {
         address conditionsImp,
         address agentsImp,
         address evaluationsImp,
-        address adaptersImp,
+        address connectorsImp,
         address accessControlsImp
     ) {
         listenersImplementation = listenersImp;
@@ -49,7 +49,7 @@ contract NibbleFactory {
         agentsImplementation = agentsImp;
         storageImplementation = storageImp;
         evaluationsImplementation = evaluationsImp;
-        adaptersImplementation = adaptersImp;
+        connectorsImplementation = connectorsImp;
         accessControlsImplementation = accessControlsImp;
         count = 0;
     }
@@ -61,18 +61,50 @@ contract NibbleFactory {
         address _newStorage = Clones.clone(storageImplementation);
         address _newConditions = Clones.clone(conditionsImplementation);
         address _newListeners = Clones.clone(listenersImplementation);
-        address _newAdapters = Clones.clone(adaptersImplementation);
+        address _newConnectors = Clones.clone(connectorsImplementation);
         address _newAgents = Clones.clone(agentsImplementation);
         address _newEvaluations = Clones.clone(evaluationsImplementation);
         address _newAccessControls = Clones.clone(accessControlsImplementation);
 
-        NibbleAccessControls(_newAccessControls).initialize(msg.sender);
-        NibbleStorage(_newStorage).initialize();
-        NibbleConditions(_newConditions).initialize();
-        NibbleListeners(_newListeners).initialize();
-        NibbleAgents(_newAgents).initialize();
-        NibbleEvaluations(_newEvaluations).initialize();
-        NibbleAdapters(_newAdapters).initialize();
+        NibbleAccessControls(_newAccessControls).initialize(
+            msg.sender,
+            address(this)
+        );
+        NibbleStorage(_newStorage).initialize(
+            address(this),
+            _newAccessControls,
+            _newConditions,
+            _newListeners,
+            _newConnectors,
+            _newAgents,
+            _newEvaluations
+        );
+
+        NibbleConditions(_newConditions).initialize(
+            address(this),
+            _newAccessControls,
+            _newStorage
+        );
+        NibbleListeners(_newListeners).initialize(
+            address(this),
+            _newAccessControls,
+            _newStorage
+        );
+        NibbleEvaluations(_newEvaluations).initialize(
+            address(this),
+            _newAccessControls,
+            _newStorage
+        );
+        NibbleConnectors(_newConnectors).initialize(
+            address(this),
+            _newAccessControls,
+            _newStorage
+        );
+        NibbleAgents(_newAgents).initialize(
+            address(this),
+            _newAccessControls,
+            _newStorage
+        );
 
         count++;
         bytes memory _id = _generateRandomId(
@@ -90,7 +122,7 @@ contract NibbleFactory {
                 conditionContract: _newConditions,
                 evaluationContract: _newEvaluations,
                 agentContract: _newAgents,
-                adapterContract: _newAdapters,
+                connectorContract: _newConnectors,
                 accessControlContract: _newAccessControls,
                 id: _id,
                 count: count
@@ -103,7 +135,7 @@ contract NibbleFactory {
             _newConditions,
             _newEvaluations,
             _newAgents,
-            _newAdapters,
+            _newConnectors,
             _newAccessControls,
             _id,
             count
@@ -116,7 +148,7 @@ contract NibbleFactory {
                 _newConditions,
                 _newEvaluations,
                 _newAgents,
-                _newAdapters,
+                _newConnectors,
                 _newAccessControls
             ],
             _id,
@@ -176,11 +208,11 @@ contract NibbleFactory {
         return _nibbles[deployer][index].conditionContract;
     }
 
-    function getNibbleAdapterContract(
+    function getNibbleConnectorContract(
         address deployer,
         uint256 index
     ) public view returns (address) {
-        return _nibbles[deployer][index].adapterContract;
+        return _nibbles[deployer][index].connectorContract;
     }
 
     function getNibbleEvaluationContract(

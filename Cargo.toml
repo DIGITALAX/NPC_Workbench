@@ -13,8 +13,11 @@ base64 = "0.22.1"
 chrono = "0.4.38"
 dotenv = "0.15.0"
 ethers = {version ="2.0.14", features = ["abigen", "etherscan"]}
+futures = "0.3.31"
 lit-utilities-wasm = "0.1.0"
+rand = "0.8.5"
 reqwest = { version = "0.12.9", features = ["json"]}
+serde = "1.0.215"
 serde_json = "1.0.132"
 tokio = {version ="1.41.1", features = ["full"]}
 uuid = { version ="1.11.0", features = ["v4"] }

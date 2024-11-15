@@ -1,23 +1,32 @@
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use core::fmt;
 use reqwest::Client;
 use serde_json::Value;
-use std::{collections::HashMap, error::Error};
+use std::{collections::HashMap, error::Error, sync::Arc};
 
 #[async_trait]
 pub trait IPFSClient {
     async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error>>;
 }
 
+#[derive(Debug)]
 pub enum IPFSProvider {
     Infura,
     Pinata,
     Custom,
 }
 
+#[derive(Debug)]
 struct CustomIPFSClient {
     pub api_url: String,
     pub headers: HashMap<String, String>,
+}
+
+impl fmt::Debug for dyn IPFSClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IPFSClient")
+    }
 }
 
 #[async_trait]
@@ -95,9 +104,9 @@ impl IPFSClientFactory {
     pub fn create_client(
         provider: IPFSProvider,
         config: HashMap<String, String>,
-    ) -> Result<Box<dyn IPFSClient>, Box<dyn Error>> {
+    ) -> Result<Arc<dyn IPFSClient>, Box<dyn Error>> {
         match provider {
-            IPFSProvider::Infura => Ok(Box::new(InfuraIPFSClient {
+            IPFSProvider::Infura => Ok(Arc::new(InfuraIPFSClient {
                 project_id: config
                     .get("project_id")
                     .ok_or("Project ID missing")?
@@ -107,7 +116,7 @@ impl IPFSClientFactory {
                     .ok_or("Project Secret missing")?
                     .to_string(),
             })),
-            IPFSProvider::Pinata => Ok(Box::new(PinataIPFSClient {
+            IPFSProvider::Pinata => Ok(Arc::new(PinataIPFSClient {
                 api_key: config.get("api_key").ok_or("API Key missing")?.to_string(),
                 secret_api_key: config
                     .get("secret_api_key")
@@ -118,11 +127,11 @@ impl IPFSClientFactory {
                 let api_url = config.get("api_url").ok_or("API URL missing")?.to_string();
                 let headers: HashMap<String, String> = config
                     .iter()
-                    .filter(|(k, _)| k != &"api_url") // Filtrar la URL y usar el resto como headers
+                    .filter(|(k, _)| k != &"api_url")
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
 
-                Ok(Box::new(CustomIPFSClient { api_url, headers }))
+                Ok(Arc::new(CustomIPFSClient { api_url, headers }))
             }
         }
     }

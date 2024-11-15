@@ -1,28 +1,32 @@
-use crate::{nibble::Nibble, utils::convert_value_to_token};
+use crate::{
+    nibble::{Adaptable, Nibble},
+    utils::{convert_value_to_token, generate_unique_id},
+};
 use ethers::{
     abi,
     prelude::*,
     types::{Address, Eip1559TransactionRequest, NameOrAddress, U256},
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{error::Error, sync::Arc};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OnChainConnector {
     pub name: String,
+    pub id: Vec<u8>,
     pub address: Address,
     pub public: bool,
     pub transactions: Vec<OnChainTransaction>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OnChainTransaction {
     pub function_signature: String,
     pub params: Vec<Value>,
     pub gas_options: GasOptions,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GasOptions {
     pub max_fee_per_gas: Option<U256>,
     pub max_priority_fee_per_gas: Option<U256>,
@@ -46,14 +50,16 @@ pub fn configure_new_onchain_connector(
     name: &str,
     address: Address,
     public: bool,
-) -> Result<(), Box<dyn Error>> {
-    nibble.onchain_connectors.push(OnChainConnector {
+) -> Result<OnChainConnector, Box<dyn Error>> {
+    let on_chain = OnChainConnector {
         name: name.to_string(),
+        id: generate_unique_id(),
         address,
         public,
         transactions: vec![],
-    });
-    Ok(())
+    };
+    nibble.onchain_connectors.push(on_chain.clone());
+    Ok(on_chain)
 }
 
 impl OnChainConnector {
@@ -121,5 +127,69 @@ impl OnChainConnector {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(func.encode_input(&tokens)?)
+    }
+}
+
+impl Adaptable for OnChainConnector {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn id(&self) -> &Vec<u8> {
+        &self.id
+    }
+}
+
+impl OnChainConnector {
+    pub fn to_json(&self) -> Map<String, Value> {
+        let mut map = Map::new();
+        map.insert("name".to_string(), Value::String(self.name.clone()));
+        map.insert(
+            "address".to_string(),
+            Value::String(format!("{:?}", self.address)),
+        );
+        map.insert("public".to_string(), Value::Bool(self.public));
+
+        let transactions: Vec<Value> = self
+            .transactions
+            .iter()
+            .map(|tx| {
+                let mut tx_map = Map::new();
+                tx_map.insert(
+                    "function_signature".to_string(),
+                    Value::String(tx.function_signature.clone()),
+                );
+                tx_map.insert(
+                    "params".to_string(),
+                    Value::Array(tx.params.iter().cloned().collect::<Vec<Value>>()),
+                );
+                let mut gas_map = Map::new();
+                if let Some(max_fee) = tx.gas_options.max_fee_per_gas {
+                    gas_map.insert(
+                        "max_fee_per_gas".to_string(),
+                        Value::String(format!("{:?}", max_fee)),
+                    );
+                }
+                if let Some(priority_fee) = tx.gas_options.max_priority_fee_per_gas {
+                    gas_map.insert(
+                        "max_priority_fee_per_gas".to_string(),
+                        Value::String(format!("{:?}", priority_fee)),
+                    );
+                }
+                if let Some(gas_limit) = tx.gas_options.gas_limit {
+                    gas_map.insert(
+                        "gas_limit".to_string(),
+                        Value::String(format!("{:?}", gas_limit)),
+                    );
+                }
+                if let Some(nonce) = tx.gas_options.nonce {
+                    gas_map.insert("nonce".to_string(), Value::String(format!("{:?}", nonce)));
+                }
+                tx_map.insert("gas_options".to_string(), Value::Object(gas_map));
+                Value::Object(tx_map)
+            })
+            .collect();
+
+        map.insert("transactions".to_string(), Value::Array(transactions));
+        map
     }
 }

@@ -5,30 +5,35 @@ import "./NibbleLibrary.sol";
 
 contract NibbleAccessControls is Initializable {
     address private _admin;
-    bool public initialized;
-    address public nibbleFactory;
+    mapping(address => bool) private _humanWriters;
+    mapping(address => bool) private _agentWriters;
 
     event AdminChanged(address indexed oldAdmin, address indexed newAdmin);
     event RoleGranted(address indexed agent, string role);
     event RoleRevoked(address indexed agent, string role);
 
-    modifier OnlyNibbleFactory() {
+    modifier onlyNibbleFactory(address nibbleFactory) {
         if (msg.sender != nibbleFactory) {
             revert NibbleLibrary.InvalidInitializer();
         }
         _;
     }
 
-    constructor(address nibbleFactoryAddress) {
-        nibbleFactory = nibbleFactoryAddress;
+    function initialize(
+        address nibbleFactoryAddress,
+        address admin
+    ) external onlyNibbleFactory(nibbleFactoryAddress) onlyInitializing {
+        _admin = admin;
+
+        _humanWriters[admin] = true;
     }
 
-    function initialize(address admin) external OnlyNibbleFactory {
-        if (initialized) {
-            revert NibbleLibrary.AlreadyInitialized();
-        }
-        _admin = admin;
-        initialized = true;
+    function getHumanWriter(address writer) public view returns (bool) {
+        return _humanWriters[writer];
+    }
+
+    function getAgentWriter(address writer) public view returns (bool) {
+        return _agentWriters[writer];
     }
 
     function getAdmin() public view returns (address) {
