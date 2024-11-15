@@ -15,6 +15,7 @@ contract NibbleLibrary {
         address evaluationContract;
         address agentContract;
         address connectorContract;
+        address fheGateContract;
         address accessControlContract;
         bytes id;
         uint256 count;
@@ -27,6 +28,12 @@ contract NibbleLibrary {
     }
 
     struct Evaluation {
+        bytes id;
+        string metadata;
+        bool encrypted;
+    }
+
+    struct FHEGate {
         bytes id;
         string metadata;
         bool encrypted;
@@ -59,6 +66,7 @@ contract NibbleLibrary {
         Connector[] connectors;
         Agent[] agents;
         Evaluation[] evaluations;
+        FHEGate[] fheGates;
     }
 
     struct RemoveAdapters {
@@ -67,5 +75,6 @@ contract NibbleLibrary {
         bytes[] connectors;
         bytes[] agents;
         bytes[] evaluations;
+        bytes[] fheGates;
     }
 }

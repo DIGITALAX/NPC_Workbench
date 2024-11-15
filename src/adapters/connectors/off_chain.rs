@@ -11,7 +11,7 @@ pub struct OffChainConnector {
     pub name: String,
     pub id: Vec<u8>,
     pub api_url: String,
-    pub public: bool,
+    pub encrypted: bool,
     pub http_method: Method,
     pub headers: Option<HashMap<String, String>>,
     pub execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
@@ -22,7 +22,7 @@ impl fmt::Debug for OffChainConnector {
         f.debug_struct("OffChainConnector")
             .field("name", &self.name)
             .field("api_url", &self.api_url)
-            .field("public", &self.public)
+            .field("public", &self.encrypted)
             .field("http_method", &self.http_method)
             .field("headers", &self.headers)
             .field("execution_fn", &"Function pointer")
@@ -71,7 +71,7 @@ pub fn configure_new_offchain_connector(
     nibble: &mut Nibble,
     name: &str,
     api_url: &str,
-    public: bool,
+    encrypted: bool,
     http_method: Method,
     headers: Option<HashMap<String, String>>,
     execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
@@ -80,7 +80,7 @@ pub fn configure_new_offchain_connector(
         name: name.to_string(),
         id: generate_unique_id(),
         api_url: api_url.to_string(),
-        public,
+        encrypted,
         http_method,
         headers,
         execution_fn,
@@ -103,7 +103,7 @@ impl OffChainConnector {
         let mut map = Map::new();
         map.insert("name".to_string(), Value::String(self.name.clone()));
         map.insert("api_url".to_string(), Value::String(self.api_url.clone()));
-        map.insert("public".to_string(), Value::Bool(self.public));
+        map.insert("public".to_string(), Value::Bool(self.encrypted));
         map.insert(
             "http_method".to_string(),
             Value::String(self.http_method.as_str().to_string()),

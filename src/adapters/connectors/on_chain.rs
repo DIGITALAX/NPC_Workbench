@@ -15,7 +15,7 @@ pub struct OnChainConnector {
     pub name: String,
     pub id: Vec<u8>,
     pub address: Address,
-    pub public: bool,
+    pub encrypted: bool,
     pub transactions: Vec<OnChainTransaction>,
 }
 
@@ -49,13 +49,13 @@ pub fn configure_new_onchain_connector(
     nibble: &mut Nibble,
     name: &str,
     address: Address,
-    public: bool,
+    encrypted: bool,
 ) -> Result<OnChainConnector, Box<dyn Error>> {
     let on_chain = OnChainConnector {
         name: name.to_string(),
         id: generate_unique_id(),
         address,
-        public,
+        encrypted,
         transactions: vec![],
     };
     nibble.onchain_connectors.push(on_chain.clone());
@@ -147,7 +147,7 @@ impl OnChainConnector {
             "address".to_string(),
             Value::String(format!("{:?}", self.address)),
         );
-        map.insert("public".to_string(), Value::Bool(self.public));
+        map.insert("public".to_string(), Value::Bool(self.encrypted));
 
         let transactions: Vec<Value> = self
             .transactions

@@ -16,7 +16,7 @@ pub struct Listener {
     pub event_name: String,
     pub listener_type: ListenerType,
     pub condition: ConditionCheck,
-    pub public: bool,
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ pub fn configure_new_listener(
     listener_type: ListenerType,
     condition_fn: fn(Value) -> bool,
     expected_value: Option<Value>,
-    public: bool,
+    encrypted: bool,
 ) -> Result<(), Box<dyn Error>> {
     let condition = ConditionCheck {
         condition_fn,
@@ -55,7 +55,7 @@ pub fn configure_new_listener(
         event_name: event_name.to_string(),
         listener_type,
         condition,
-        public,
+        encrypted,
     });
 
     Ok(())
@@ -78,7 +78,7 @@ impl Listener {
             "event_name".to_string(),
             Value::String(self.event_name.clone()),
         );
-        map.insert("public".to_string(), Value::Bool(self.public));
+        map.insert("public".to_string(), Value::Bool(self.encrypted));
 
         let listener_type_map = match &self.listener_type {
             ListenerType::OnChain {

@@ -1,4 +1,7 @@
-use crate::{nibble::{Adaptable, Nibble}, utils::generate_unique_id};
+use crate::{
+    nibble::{Adaptable, Nibble},
+    utils::generate_unique_id,
+};
 use ethers::{core::rand::thread_rng, prelude::*};
 use serde_json::{Map, Value};
 use std::error::Error;
@@ -49,7 +52,7 @@ pub struct Agent {
     pub wallet: LocalWallet,
     pub write_role: bool,
     pub admin_role: bool,
-    pub token_role: bool,
+    pub encrypted: bool,
 }
 
 pub fn configure_new_agent(
@@ -60,7 +63,7 @@ pub fn configure_new_agent(
     system: &str,
     write_role: bool,
     admin_role: bool,
-    token_role: bool,
+    encrypted: bool,
     model: LLMModel,
 ) -> Result<Agent, Box<dyn Error>> {
     let wallet = LocalWallet::new(&mut thread_rng());
@@ -74,7 +77,7 @@ pub fn configure_new_agent(
         model: model.clone(),
         write_role,
         admin_role,
-        token_role,
+        encrypted,
         wallet: wallet.clone(),
     };
 
@@ -224,7 +227,6 @@ impl Agent {
         );
         map.insert("write_role".to_string(), Value::Bool(self.write_role));
         map.insert("admin_role".to_string(), Value::Bool(self.admin_role));
-        map.insert("token_role".to_string(), Value::Bool(self.token_role));
         map
     }
 }

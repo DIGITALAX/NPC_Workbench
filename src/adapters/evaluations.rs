@@ -10,7 +10,7 @@ use std::{error::Error, sync::Arc};
 #[derive(Debug, Clone)]
 pub struct Evaluation {
     pub name: String,
-    pub public: bool,
+    pub encrypted: bool,
     pub id: Vec<u8>,
     pub evaluation_type: EvaluationType,
 }
@@ -64,11 +64,11 @@ pub fn configure_new_evaluation(
     nibble: &mut Nibble,
     name: &str,
     evaluation_type: EvaluationType,
-    public: bool,
+    encrypted: bool,
 ) -> Result<Evaluation, Box<dyn Error>> {
     let evaluation = Evaluation {
         name: name.to_string(),
-        public,
+        encrypted,
         id: generate_unique_id(),
         evaluation_type,
     };
@@ -142,7 +142,7 @@ impl Evaluation {
     pub fn to_json(&self) -> Map<String, Value> {
         let mut map = Map::new();
         map.insert("name".to_string(), Value::String(self.name.clone()));
-        map.insert("public".to_string(), Value::Bool(self.public));
+        map.insert("public".to_string(), Value::Bool(self.encrypted));
         map.insert(
             "evaluation_type".to_string(),
             self.evaluation_type.to_json(),

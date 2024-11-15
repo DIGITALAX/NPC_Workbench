@@ -21,7 +21,7 @@ use ethers::{
 };
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Method;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc};
 pub struct AdapterHandle<'a, T>
@@ -49,7 +49,7 @@ pub enum Adapter {
     Evaluation,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ContractInfo {
     pub name: String,
     pub address: Address,
@@ -195,10 +195,12 @@ pub struct ContractListener {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(non_snake_case)]
 pub struct ContractConnector {
     pub id: Vec<u8>,
     pub metadata: String,
     pub encrypted: bool,
+
     pub onChain: bool,
 }
 
@@ -249,7 +251,7 @@ impl Nibble {
         listener_type: ListenerType,
         condition_fn: fn(Value) -> bool,
         expected_value: Option<Value>,
-        public: bool,
+        encrypted: bool,
     ) -> Result<(), Box<dyn Error>> {
         configure_new_listener(
             self,
@@ -258,7 +260,7 @@ impl Nibble {
             listener_type,
             condition_fn,
             expected_value,
-            public,
+            encrypted,
         )
     }
 
@@ -268,7 +270,7 @@ impl Nibble {
         condition_type: ConditionType,
         condition_fn: fn(Value) -> bool,
         expected_value: Option<Value>,
-        public: bool,
+        encrypted: bool,
     ) -> Result<AdapterHandle<'_, Condition>, Box<dyn Error>> {
         let condition: Condition = configure_new_condition(
             self,
@@ -276,7 +278,7 @@ impl Nibble {
             condition_type,
             condition_fn,
             expected_value,
-            public,
+            encrypted,
         )?;
         self.conditions.push(condition.clone());
         Ok(AdapterHandle {
@@ -290,9 +292,9 @@ impl Nibble {
         &mut self,
         name: &str,
         key: &str,
-        public: bool,
+        encrypted: bool,
     ) -> Result<AdapterHandle<'_, FHEGate>, Box<dyn Error>> {
-        let fhe_gate: FHEGate = configure_new_gate(self, name, key, public)?;
+        let fhe_gate: FHEGate = configure_new_gate(self, name, key, encrypted)?;
         self.fhe_gates.push(fhe_gate.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -305,9 +307,9 @@ impl Nibble {
         &mut self,
         name: &str,
         evaluation_type: EvaluationType,
-        public: bool,
+        encrypted: bool,
     ) -> Result<AdapterHandle<'_, Evaluation>, Box<dyn Error>> {
-        let evaluation = configure_new_evaluation(self, name, evaluation_type, public)?;
+        let evaluation = configure_new_evaluation(self, name, evaluation_type, encrypted)?;
 
         self.evaluations.push(evaluation.clone());
         Ok(AdapterHandle {
@@ -321,9 +323,9 @@ impl Nibble {
         &mut self,
         name: &str,
         address: Address,
-        public: bool,
+        encrypted: bool,
     ) -> Result<AdapterHandle<'_, OnChainConnector>, Box<dyn Error>> {
-        let on_chain = configure_new_onchain_connector(self, name, address, public)?;
+        let on_chain = configure_new_onchain_connector(self, name, address, encrypted)?;
         self.onchain_connectors.push(on_chain.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -336,7 +338,7 @@ impl Nibble {
         &mut self,
         name: &str,
         api_url: &str,
-        public: bool,
+        encrypted: bool,
         http_method: Method,
         headers: Option<HashMap<String, String>>,
         execution_fn: Option<Box<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
@@ -345,7 +347,7 @@ impl Nibble {
             self,
             name,
             api_url,
-            public,
+            encrypted,
             http_method,
             headers,
             execution_fn.map(|f| Arc::from(f)),
@@ -367,8 +369,8 @@ impl Nibble {
         system: &str,
         write_role: bool,
         admin_role: bool,
-        token_role: bool,
         model: LLMModel,
+        encrypted: bool,
     ) -> Result<AdapterHandle<'_, Agent>, Box<dyn Error>> {
         let agent = agents::configure_new_agent(
             self,
@@ -378,7 +380,7 @@ impl Nibble {
             system,
             write_role,
             admin_role,
-            token_role,
+            encrypted,
             model,
         )?;
 
@@ -409,7 +411,7 @@ impl Nibble {
         );
 
         let method =
-            contract_instance.method::<_, ([Address; 7], Vec<u8>, U256)>("deployFromFactory", {});
+            contract_instance.method::<_, ([Address; 8], Vec<u8>, U256)>("deployFromFactory", {});
 
         match method {
             Ok(call) => {
@@ -456,8 +458,8 @@ impl Nibble {
 
                     if let Some(log) = receipt.logs.get(0) {
                         let log_data_bytes = log.data.0.clone();
-                        let return_values: ([Address; 7], Vec<u8>, U256) =
-                            <([Address; 7], Vec<u8>, U256)>::decode(&log_data_bytes)?;
+                        let return_values: ([Address; 8], Vec<u8>, U256) =
+                            <([Address; 8], Vec<u8>, U256)>::decode(&log_data_bytes)?;
 
                         self.contracts = vec![
                             ContractInfo {
@@ -485,8 +487,12 @@ impl Nibble {
                                 address: return_values.0[5],
                             },
                             ContractInfo {
-                                name: "NibbleAccessControl".to_string(),
+                                name: "NibbleFHEGates".to_string(),
                                 address: return_values.0[6],
+                            },
+                            ContractInfo {
+                                name: "NibbleAccessControl".to_string(),
+                                address: return_values.0[7],
                             },
                         ];
                         self.id = Some(return_values.1);
@@ -525,8 +531,12 @@ impl Nibble {
         }
     }
 
-    pub async fn load_nibble(&mut self, id: Vec<u8>) -> Result<Nibble, Box<dyn Error>> {
-        let response = load_nibble_from_subgraph(id).await?;
+    pub async fn load_nibble(
+        &mut self,
+        id: Vec<u8>,
+        graph_api_key: Option<&str>,
+    ) -> Result<Nibble, Box<dyn Error>> {
+        let response = load_nibble_from_subgraph(id, graph_api_key).await?;
         self.contracts = response.contracts;
         self.conditions = response.conditions;
         self.listeners = response.listeners;

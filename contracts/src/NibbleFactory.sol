@@ -10,6 +10,7 @@ import "./NibbleEvaluations.sol";
 import "./NibbleAgents.sol";
 import "./NibbleAccessControls.sol";
 import "./NibbleStorage.sol";
+import "./NibbleFHEGates.sol";
 
 contract NibbleFactory {
     uint256 public count;
@@ -19,6 +20,7 @@ contract NibbleFactory {
     address public storageImplementation;
     address public evaluationsImplementation;
     address public connectorsImplementation;
+    address public fheGatesImplementation;
     address public accessControlsImplementation;
     mapping(address => NibbleLibrary.Nibble[]) private _nibbles;
     mapping(address => uint256) private _nibbleCount;
@@ -30,6 +32,7 @@ contract NibbleFactory {
         address evaluationsContract,
         address agentsContract,
         address connectorsContract,
+        address fheGatesContract,
         address accessControlsContract,
         bytes id,
         uint256 count
@@ -42,7 +45,8 @@ contract NibbleFactory {
         address agentsImp,
         address evaluationsImp,
         address connectorsImp,
-        address accessControlsImp
+        address accessControlsImp,
+        address fheGatesImp
     ) {
         listenersImplementation = listenersImp;
         conditionsImplementation = conditionsImp;
@@ -51,12 +55,13 @@ contract NibbleFactory {
         evaluationsImplementation = evaluationsImp;
         connectorsImplementation = connectorsImp;
         accessControlsImplementation = accessControlsImp;
+        fheGatesImplementation = fheGatesImp;
         count = 0;
     }
 
     function deployFromFactory()
         external
-        returns (address[7] memory, bytes memory, uint256)
+        returns (address[8] memory, bytes memory, uint256)
     {
         address _newStorage = Clones.clone(storageImplementation);
         address _newConditions = Clones.clone(conditionsImplementation);
@@ -64,6 +69,7 @@ contract NibbleFactory {
         address _newConnectors = Clones.clone(connectorsImplementation);
         address _newAgents = Clones.clone(agentsImplementation);
         address _newEvaluations = Clones.clone(evaluationsImplementation);
+        address _newFHEGates = Clones.clone(fheGatesImplementation);
         address _newAccessControls = Clones.clone(accessControlsImplementation);
 
         NibbleAccessControls(_newAccessControls).initialize(
@@ -77,7 +83,8 @@ contract NibbleFactory {
             _newListeners,
             _newConnectors,
             _newAgents,
-            _newEvaluations
+            _newEvaluations,
+            _newFHEGates
         );
 
         NibbleConditions(_newConditions).initialize(
@@ -96,6 +103,11 @@ contract NibbleFactory {
             _newStorage
         );
         NibbleConnectors(_newConnectors).initialize(
+            address(this),
+            _newAccessControls,
+            _newStorage
+        );
+        NibbleFHEGates(_newFHEGates).initialize(
             address(this),
             _newAccessControls,
             _newStorage
@@ -124,6 +136,7 @@ contract NibbleFactory {
                 agentContract: _newAgents,
                 connectorContract: _newConnectors,
                 accessControlContract: _newAccessControls,
+                fheGateContract: _newFHEGates,
                 id: _id,
                 count: count
             })
@@ -136,6 +149,7 @@ contract NibbleFactory {
             _newEvaluations,
             _newAgents,
             _newConnectors,
+            _newFHEGates,
             _newAccessControls,
             _id,
             count
@@ -149,6 +163,7 @@ contract NibbleFactory {
                 _newEvaluations,
                 _newAgents,
                 _newConnectors,
+                _newFHEGates,
                 _newAccessControls
             ],
             _id,

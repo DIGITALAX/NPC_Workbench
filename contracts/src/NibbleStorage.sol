@@ -8,6 +8,7 @@ import "./NibbleEvaluations.sol";
 import "./NibbleConnectors.sol";
 import "./NibbleConditions.sol";
 import "./NibbleAccessControls.sol";
+import "./NibbleFHEGates.sol";
 
 contract NibbleStorage is Initializable {
     NibbleAccessControls public nibbleAccessControls;
@@ -16,6 +17,7 @@ contract NibbleStorage is Initializable {
     NibbleConnectors public nibbleConnectors;
     NibbleAgents public nibbleAgents;
     NibbleEvaluations public nibbleEvaluations;
+    NibbleFHEGates public nibbleFHEGates;
 
     event AdaptersModified();
     event AdaptersDeleted();
@@ -44,13 +46,15 @@ contract NibbleStorage is Initializable {
         address nibbleListenersAddress,
         address nibbleConnectorsAddress,
         address nibbleAgentsAddress,
-        address nibbleEvaluationsAddress
+        address nibbleEvaluationsAddress,
+        address nibbleFHEGatesAddress
     ) external onlyNibbleFactory(nibbleFactoryAddress) onlyInitializing {
         nibbleConditions = NibbleConditions(nibbleConditionsAddress);
         nibbleListeners = NibbleListeners(nibbleListenersAddress);
         nibbleConnectors = NibbleConnectors(nibbleConnectorsAddress);
         nibbleAgents = NibbleAgents(nibbleAgentsAddress);
         nibbleEvaluations = NibbleEvaluations(nibbleEvaluationsAddress);
+        nibbleFHEGates = NibbleFHEGates(nibbleFHEGatesAddress);
         nibbleAccessControls = NibbleAccessControls(
             nibbleAccessControlsAddress
         );
@@ -79,6 +83,10 @@ contract NibbleStorage is Initializable {
             nibbleEvaluations.addOrModifyEvaluationsBatch(adapters.evaluations);
         }
 
+        if (adapters.fheGates.length > 0) {
+            nibbleFHEGates.addOrModifyFHEGatesBatch(adapters.fheGates);
+        }
+
         emit AdaptersModified();
     }
 
@@ -103,6 +111,10 @@ contract NibbleStorage is Initializable {
 
         if (adapters.evaluations.length > 0) {
             nibbleEvaluations.removeEvaluationsBatch(adapters.evaluations);
+        }
+
+        if (adapters.fheGates.length > 0) {
+            nibbleFHEGates.removeFHEGatesBatch(adapters.fheGates);
         }
 
         emit AdaptersDeleted();

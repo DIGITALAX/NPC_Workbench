@@ -7,20 +7,20 @@ pub struct FHEGate {
     pub name: String,
     pub id: Vec<u8>,
     pub key: String,
-    pub public: bool,
+    pub encrypted: bool,
 }
 
 pub fn configure_new_gate(
     nibble: &mut Nibble,
     name: &str,
     key: &str,
-    public: bool,
+    encrypted: bool,
 ) -> Result<FHEGate, Box<dyn Error>> {
     let fhe_gate = FHEGate {
         name: name.to_string(),
         id: generate_unique_id(),
         key: key.to_string(),
-        public,
+        encrypted,
     };
     nibble.fhe_gates.push(fhe_gate.clone());
     Ok(fhe_gate)

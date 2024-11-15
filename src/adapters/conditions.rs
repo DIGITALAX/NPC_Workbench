@@ -11,7 +11,7 @@ pub struct Condition {
     pub name: String,
     pub condition_type: ConditionType,
     pub check: ConditionCheck,
-    pub public: bool,
+    pub encrypted: bool,
     pub id: Vec<u8>,
 }
 
@@ -72,7 +72,7 @@ pub fn configure_new_condition(
     condition_type: ConditionType,
     condition_fn: fn(Value) -> bool,
     expected_value: Option<Value>,
-    public: bool,
+    encrypted: bool,
 ) -> Result<Condition, Box<dyn Error>> {
     let check = ConditionCheck {
         condition_fn,
@@ -84,7 +84,7 @@ pub fn configure_new_condition(
         id: generate_unique_id(),
         condition_type,
         check,
-        public,
+        encrypted,
     };
 
     nibble.conditions.push(condition.clone());
@@ -105,7 +105,7 @@ impl Condition {
     pub fn to_json(&self) -> Map<String, Value> {
         let mut map = Map::new();
         map.insert("name".to_string(), Value::String(self.name.clone()));
-        map.insert("public".to_string(), Value::Bool(self.public));
+        map.insert("public".to_string(), Value::Bool(self.encrypted));
 
         let condition_type_map = match &self.condition_type {
             ConditionType::OnChain {
