@@ -1,3 +1,4 @@
+use ethers::types::H160;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -65,11 +66,12 @@ pub fn configure_new_evaluation(
     name: &str,
     evaluation_type: EvaluationType,
     encrypted: bool,
+    address: &H160
 ) -> Result<Evaluation, Box<dyn Error>> {
     let evaluation = Evaluation {
         name: name.to_string(),
         encrypted,
-        id: generate_unique_id(),
+        id: generate_unique_id(address),
         evaluation_type,
     };
     nibble.evaluations.push(evaluation.clone());

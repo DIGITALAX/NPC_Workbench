@@ -13,21 +13,33 @@ use crate::{
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     ipfs::{IPFSClient, IPFSClientFactory, IPFSProvider},
     lit::decrypt_with_private_key,
-    nibble::ContractInfo,
+    nibble::{Adapter, ContractInfo},
+    workflow::{WorkflowLink, WorkflowNode},
 };
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use chrono::Utc;
 use dotenv::dotenv;
 use ethers::{
     abi::Token,
     signers::LocalWallet,
-    types::{Address, U256},
+    types::{Address, H160, U256},
     utils::hex,
 };
 use rand::Rng;
 use reqwest::{Client, Method};
 use serde_json::{from_value, json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, env, error::Error, str::FromStr, sync::Arc};
 use tokio::time::Duration;
+
+pub struct GraphWorkflowResponse {
+    pub id: Vec<u8>,
+    pub name: String,
+    pub nodes: Vec<WorkflowNode>,
+    pub links: Vec<WorkflowLink>,
+    pub encrypted: bool,
+}
 
 pub struct GraphNibbleResponse {
     pub agents: Vec<Agent>,
@@ -89,13 +101,91 @@ pub fn load_ipfs_client() -> Result<Arc<dyn IPFSClient>, Box<dyn Error>> {
     IPFSClientFactory::create_client(provider, config)
 }
 
-pub fn generate_unique_id() -> Vec<u8> {
+pub fn generate_unique_id(address: &H160) -> Vec<u8> {
     let timestamp = Utc::now().timestamp_nanos_opt().expect("Invalid timestamp");
+
     let random_bytes: [u8; 4] = rand::thread_rng().gen();
-    let mut unique_id = Vec::with_capacity(12);
+
+    let mut hasher = Sha256::new();
+    hasher.update(address.as_bytes());
+    let address_hash = hasher.finalize();
+
+    let mut unique_id = Vec::with_capacity(12 + address_hash.len());
     unique_id.extend_from_slice(&timestamp.to_be_bytes());
     unique_id.extend_from_slice(&random_bytes);
+    unique_id.extend_from_slice(&address_hash[..8]);
+
     unique_id
+}
+
+pub async fn load_workflow_from_subgraph(
+    workflow_id: Vec<u8>,
+    nibble_id: Vec<u8>,
+    api_key: Option<String>,
+    wallet: LocalWallet,
+) -> Result<GraphWorkflowResponse, Box<dyn Error>> {
+    let mut url = GRAPH_ENDPOINT_DEV.to_string();
+
+    if api_key.is_some() {
+        url = GRAPH_ENDPOINT_PROD.replace("apikey", &api_key.unwrap());
+    }
+
+    let client = Client::new();
+
+    let query = json!({
+        "query": r#"
+                    query Workflow($id: ID!, $nibble_id: nibble_id) {
+                        workflow(id: $id, nibble_id: $nibble_id) {
+                            id
+                            name
+                            nodes
+                            links
+                        }
+                    }
+                "#,
+        "variables": {
+            "id": String::from_utf8(workflow_id)?,
+            "nibble_id": String::from_utf8(nibble_id)?
+        }
+    });
+    let res = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .json(&query)
+        .send()
+        .await?;
+
+    if res.status().is_success() {
+        let json: serde_json::Value = res.json().await?;
+
+        if let Some(object) = json["data"]["nibble"].as_object() {
+            let id = object
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing or invalid id")?
+                .to_string();
+
+            return Ok(GraphWorkflowResponse {
+                id: STANDARD.decode(&id).map_err(|_| "Failed to decode id")?,
+                name: object
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing name")?
+                    .parse::<String>()?,
+                encrypted: object
+                    .get("encrpyted")
+                    .and_then(|v| v.as_bool())
+                    .ok_or("Missing encrpyted")?,
+                nodes: build_nodes(object.get("nodes").unwrap(), wallet.clone()).await?,
+                links: build_links(object.get("links").unwrap(), wallet.clone()).await?,
+            });
+        } else {
+            return Err("No data returned from Graph query".into());
+        }
+    } else {
+        let error_text = res.text().await?;
+        Err(error_text.into())
+    }
 }
 
 pub async fn load_nibble_from_subgraph(
@@ -946,4 +1036,216 @@ pub async fn build_offchain_connectors(
     }
 
     Ok(offchain_connectors)
+}
+
+async fn build_nodes(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<WorkflowNode>, Box<dyn Error>> {
+    let mut nodes = Vec::new();
+
+    if let Some(node_array) = data.as_array() {
+        for node_data in node_array {
+            let id = node_data
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .unwrap_or_default();
+
+            let name = node_data
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unnamed Node")
+                .to_string();
+
+            let adapter_type = match node_data
+                .get("adapter_type")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing adapter_type")?
+            {
+                "Condition" => Adapter::Condition,
+                "OffChainConnector" => Adapter::OffChainConnector,
+                "OnChainConnector" => Adapter::OnChainConnector,
+                "Listener" => Adapter::Listener,
+                "FHEGate" => Adapter::FHEGate,
+                "Agent" => Adapter::Agent,
+                "Evaluation" => Adapter::Evaluation,
+                _ => return Err("Invalid adapter_type".into()),
+            };
+
+            let adapter_id = node_data
+                .get("adapter_id")
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .unwrap_or_default();
+
+            let metadata_hash = node_data.get("metadata").and_then(|v| v.as_str());
+
+            let metadata = if let Some(hash) = metadata_hash {
+                let mut fetched_metadata = fetch_metadata_from_ipfs(hash).await?;
+                if node_data
+                    .get("encrypted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    let metadata_bytes = serde_json::to_vec(&fetched_metadata)?;
+                    fetched_metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+                }
+                Some(serde_json::to_string(&fetched_metadata)?)
+            } else {
+                None
+            };
+
+            nodes.push(WorkflowNode {
+                id,
+                name,
+                adapter_type,
+                adapter_id,
+                metadata,
+            });
+        }
+    }
+
+    Ok(nodes)
+}
+
+async fn build_links(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<WorkflowLink>, Box<dyn Error>> {
+    let mut links = Vec::new();
+
+    if let Some(link_array) = data.as_array() {
+        for link_data in link_array {
+            let from_node: Vec<u8> = link_data
+                .get("from_node")
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .unwrap_or_default();
+
+            let to_node = link_data
+                .get("to_node")
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .unwrap_or_default();
+
+            let condition = if let Some(condition_data) = link_data.get("condition") {
+                Some(build_condition(condition_data, wallet.clone()).await?)
+            } else {
+                None
+            };
+
+            links.push(WorkflowLink {
+                from_node,
+                to_node,
+                condition,
+            });
+        }
+    }
+
+    Ok(links)
+}
+
+async fn build_condition(
+    condition_data: &Value,
+    wallet: LocalWallet,
+) -> Result<Condition, Box<dyn Error>> {
+    let id = condition_data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| hex::decode(s).unwrap_or_default())
+        .unwrap_or_default();
+
+    let metadata_hash = condition_data
+        .get("metadata")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing metadata")?;
+
+    let encrypted = condition_data
+        .get("encrypted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+    if encrypted {
+        let metadata_bytes = serde_json::to_vec(&metadata)?;
+        metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+    }
+
+    let name = metadata
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unnamed Condition")
+        .to_string();
+
+    let condition_type = match metadata
+        .get("condition_type")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing condition_type")?
+    {
+        "OnChain" => ConditionType::OnChain {
+            contract_address: metadata
+                .get("contract_address")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing contract_address")?
+                .parse::<Address>()?,
+            function_signature: metadata
+                .get("function_signature")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        },
+        "OffChain" => ConditionType::OffChain {
+            api_url: metadata
+                .get("api_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        },
+        "InternalState" => ConditionType::InternalState {
+            field_name: metadata
+                .get("field_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        },
+        "ContextBased" => ConditionType::ContextBased {
+            key: metadata
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        },
+        "TimeBased" => ConditionType::TimeBased {
+            comparison_time: metadata
+                .get("comparison_time")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing comparison_time")?
+                .parse::<chrono::NaiveTime>()?,
+            comparison_type: match metadata
+                .get("comparison_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("After")
+            {
+                "Before" => TimeComparisonType::Before,
+                "After" => TimeComparisonType::After,
+                _ => return Err("Invalid comparison_type".into()),
+            },
+        },
+        _ => return Err("Invalid condition_type".into()),
+    };
+
+    let check = ConditionCheck {
+        condition_fn: |_v| true,
+        expected_value: metadata.get("expected_value").cloned(),
+    };
+
+    Ok(Condition {
+        name,
+        condition_type,
+        check,
+        encrypted,
+        id,
+    })
 }

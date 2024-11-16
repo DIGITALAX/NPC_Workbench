@@ -9,6 +9,7 @@ import "./NibbleConnectors.sol";
 import "./NibbleConditions.sol";
 import "./NibbleAccessControls.sol";
 import "./NibbleFHEGates.sol";
+import "./NibbleWorkflows.sol";
 
 contract NibbleStorage is Initializable {
     NibbleAccessControls public nibbleAccessControls;
@@ -18,9 +19,12 @@ contract NibbleStorage is Initializable {
     NibbleAgents public nibbleAgents;
     NibbleEvaluations public nibbleEvaluations;
     NibbleFHEGates public nibbleFHEGates;
+    NibbleWorkflows public nibbleWorkflows;
 
-    event AdaptersModified();
-    event AdaptersDeleted();
+    event AdaptersModified(address writer);
+    event AdaptersDeleted(address writer);
+    event WorkflowModified(bytes workflowId, address writer);
+    event WorkflowDeleted(bytes workflowId, address writer);
 
     modifier onlyNibbleFactory(address nibbleFactory) {
         if (msg.sender != nibbleFactory) {
@@ -47,7 +51,8 @@ contract NibbleStorage is Initializable {
         address nibbleConnectorsAddress,
         address nibbleAgentsAddress,
         address nibbleEvaluationsAddress,
-        address nibbleFHEGatesAddress
+        address nibbleFHEGatesAddress,
+        address nibbleWorkflowsAddress
     ) external onlyNibbleFactory(nibbleFactoryAddress) onlyInitializing {
         nibbleConditions = NibbleConditions(nibbleConditionsAddress);
         nibbleListeners = NibbleListeners(nibbleListenersAddress);
@@ -58,11 +63,26 @@ contract NibbleStorage is Initializable {
         nibbleAccessControls = NibbleAccessControls(
             nibbleAccessControlsAddress
         );
+        nibbleWorkflows = NibbleWorkflows(nibbleWorkflowsAddress);
+    }
+
+    function addOrModifyWorkflow(
+        NibbleLibrary.Workflow memory workflow
+    ) external onlyWriter {
+        nibbleWorkflows.addOrModifyWorkflow(workflow);
+
+        emit WorkflowModified(workflow.id, msg.sender);
+    }
+
+    function removeWorkflow(bytes memory workflowId) external onlyWriter {
+        nibbleWorkflows.removeWorkflow(workflowId);
+
+        emit WorkflowDeleted(workflowId, msg.sender);
     }
 
     function addOrModifyAdaptersBatch(
         NibbleLibrary.ModifyAdapters memory adapters
-    ) external {
+    ) external onlyWriter {
         if (adapters.conditions.length > 0) {
             nibbleConditions.addOrModifyConditionsBatch(adapters.conditions);
         }
@@ -87,12 +107,12 @@ contract NibbleStorage is Initializable {
             nibbleFHEGates.addOrModifyFHEGatesBatch(adapters.fheGates);
         }
 
-        emit AdaptersModified();
+        emit AdaptersModified(msg.sender);
     }
 
     function removeAdaptersBatch(
         NibbleLibrary.RemoveAdapters memory adapters
-    ) external {
+    ) external onlyWriter {
         if (adapters.conditions.length > 0) {
             nibbleConditions.removeConditionsBatch(adapters.conditions);
         }
@@ -117,6 +137,6 @@ contract NibbleStorage is Initializable {
             nibbleFHEGates.removeFHEGatesBatch(adapters.fheGates);
         }
 
-        emit AdaptersDeleted();
+        emit AdaptersDeleted(msg.sender);
     }
 }

@@ -60,6 +60,12 @@ contract NibbleLibrary {
         bool writer;
     }
 
+    struct Workflow {
+        bytes id;
+        string metadata;
+        bool encrypted;
+    }
+
     struct ModifyAdapters {
         Condition[] conditions;
         Listener[] listeners;

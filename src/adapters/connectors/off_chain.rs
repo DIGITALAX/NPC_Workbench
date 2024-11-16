@@ -1,6 +1,7 @@
 use core::fmt;
 use std::{collections::HashMap, error::Error, sync::Arc};
 
+use ethers::types::H160;
 use reqwest::{Client, Method};
 use serde_json::{Map, Value};
 
@@ -75,10 +76,11 @@ pub fn configure_new_offchain_connector(
     http_method: Method,
     headers: Option<HashMap<String, String>>,
     execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
+    address: &H160
 ) -> Result<OffChainConnector, Box<dyn Error>> {
     let off_chain = OffChainConnector {
         name: name.to_string(),
-        id: generate_unique_id(),
+        id: generate_unique_id(address),
         api_url: api_url.to_string(),
         encrypted,
         http_method,

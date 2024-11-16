@@ -71,7 +71,7 @@ impl IPFSClient for InfuraIPFSClient {
 
         let response_json: Value = response.json().await?;
         let ipfs_hash = response_json["Hash"].as_str().unwrap().to_string();
-        Ok(ipfs_hash)
+        Ok(format!("{}{}", "ipfs://", ipfs_hash))
     }
 }
 

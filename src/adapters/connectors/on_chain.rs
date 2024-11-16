@@ -50,10 +50,11 @@ pub fn configure_new_onchain_connector(
     name: &str,
     address: Address,
     encrypted: bool,
+    owner_address: &H160
 ) -> Result<OnChainConnector, Box<dyn Error>> {
     let on_chain = OnChainConnector {
         name: name.to_string(),
-        id: generate_unique_id(),
+        id: generate_unique_id(owner_address),
         address,
         encrypted,
         transactions: vec![],

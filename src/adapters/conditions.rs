@@ -2,7 +2,7 @@ use crate::{
     nibble::{Adaptable, Nibble},
     utils::generate_unique_id,
 };
-use ethers::abi::Address;
+use ethers::{abi::Address, types::H160};
 use serde_json::{Map, Value};
 use std::error::Error;
 
@@ -73,6 +73,7 @@ pub fn configure_new_condition(
     condition_fn: fn(Value) -> bool,
     expected_value: Option<Value>,
     encrypted: bool,
+    address: &H160
 ) -> Result<Condition, Box<dyn Error>> {
     let check = ConditionCheck {
         condition_fn,
@@ -81,7 +82,7 @@ pub fn configure_new_condition(
 
     let condition = Condition {
         name: name.to_string(),
-        id: generate_unique_id(),
+        id: generate_unique_id(address),
         condition_type,
         check,
         encrypted,

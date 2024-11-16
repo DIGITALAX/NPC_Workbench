@@ -22,6 +22,8 @@ contract NibbleFactory {
     address public connectorsImplementation;
     address public fheGatesImplementation;
     address public accessControlsImplementation;
+    address public workflowsImplementation;
+
     mapping(address => NibbleLibrary.Nibble[]) private _nibbles;
     mapping(address => uint256) private _nibbleCount;
 
@@ -34,6 +36,7 @@ contract NibbleFactory {
         address connectorsContract,
         address fheGatesContract,
         address accessControlsContract,
+        address workflowsContract,
         bytes id,
         uint256 count
     );
@@ -46,7 +49,8 @@ contract NibbleFactory {
         address evaluationsImp,
         address connectorsImp,
         address accessControlsImp,
-        address fheGatesImp
+        address fheGatesImp,
+        address workflowsImp
     ) {
         listenersImplementation = listenersImp;
         conditionsImplementation = conditionsImp;
@@ -56,12 +60,13 @@ contract NibbleFactory {
         connectorsImplementation = connectorsImp;
         accessControlsImplementation = accessControlsImp;
         fheGatesImplementation = fheGatesImp;
+        workflowsImplementation = workflowsImp;
         count = 0;
     }
 
     function deployFromFactory()
         external
-        returns (address[8] memory, bytes memory, uint256)
+        returns (address[9] memory, bytes memory, uint256)
     {
         address _newStorage = Clones.clone(storageImplementation);
         address _newConditions = Clones.clone(conditionsImplementation);
@@ -71,6 +76,7 @@ contract NibbleFactory {
         address _newEvaluations = Clones.clone(evaluationsImplementation);
         address _newFHEGates = Clones.clone(fheGatesImplementation);
         address _newAccessControls = Clones.clone(accessControlsImplementation);
+        address _newWorkflows = Clones.clone(workflowsImplementation);
 
         NibbleAccessControls(_newAccessControls).initialize(
             msg.sender,
@@ -84,7 +90,8 @@ contract NibbleFactory {
             _newConnectors,
             _newAgents,
             _newEvaluations,
-            _newFHEGates
+            _newFHEGates,
+            _newWorkflows
         );
 
         NibbleConditions(_newConditions).initialize(
@@ -151,6 +158,7 @@ contract NibbleFactory {
             _newConnectors,
             _newFHEGates,
             _newAccessControls,
+            _newWorkflows,
             _id,
             count
         );
@@ -164,7 +172,8 @@ contract NibbleFactory {
                 _newAgents,
                 _newConnectors,
                 _newFHEGates,
-                _newAccessControls
+                _newAccessControls,
+                _newWorkflows
             ],
             _id,
             count

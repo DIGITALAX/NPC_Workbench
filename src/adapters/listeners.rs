@@ -2,7 +2,7 @@ use crate::{
     nibble::{Adaptable, Nibble},
     utils::generate_unique_id,
 };
-use ethers::abi::Address;
+use ethers::{abi::Address, types::H160};
 use serde_json::{Map, Value};
 use std::error::Error;
 use tokio::time::Duration;
@@ -43,6 +43,7 @@ pub fn configure_new_listener(
     condition_fn: fn(Value) -> bool,
     expected_value: Option<Value>,
     encrypted: bool,
+    address: &H160
 ) -> Result<(), Box<dyn Error>> {
     let condition = ConditionCheck {
         condition_fn,
@@ -51,7 +52,7 @@ pub fn configure_new_listener(
 
     nibble.listeners.push(Listener {
         name: name.to_string(),
-        id: generate_unique_id(),
+        id: generate_unique_id(address),
         event_name: event_name.to_string(),
         listener_type,
         condition,

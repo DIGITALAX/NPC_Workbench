@@ -13,7 +13,8 @@ use crate::{
     constants::NIBBLE_FACTORY_CONTRACT,
     ipfs::{IPFSClient, IPFSClientFactory, IPFSProvider},
     lit::encrypt_with_public_key,
-    utils::load_nibble_from_subgraph,
+    utils::{generate_unique_id, load_nibble_from_subgraph, load_workflow_from_subgraph},
+    workflow::Workflow,
 };
 use ethers::{
     abi::{Abi, AbiDecode, Token, Tokenize},
@@ -39,7 +40,7 @@ pub trait Adaptable {
     fn id(&self) -> &Vec<u8>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Adapter {
     Condition,
     OffChainConnector,
@@ -56,7 +57,7 @@ pub struct ContractInfo {
     pub address: Address,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Nibble {
     pub agents: Vec<Agent>,
     pub conditions: Vec<Condition>,
@@ -279,6 +280,7 @@ impl Nibble {
             condition_fn,
             expected_value,
             encrypted,
+            &self.owner_wallet.address(),
         )
     }
 
@@ -297,6 +299,7 @@ impl Nibble {
             condition_fn,
             expected_value,
             encrypted,
+            &self.owner_wallet.address(),
         )?;
         self.conditions.push(condition.clone());
         Ok(AdapterHandle {
@@ -312,7 +315,8 @@ impl Nibble {
         key: &str,
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, FHEGate>, Box<dyn Error>> {
-        let fhe_gate: FHEGate = configure_new_gate(self, name, key, encrypted)?;
+        let fhe_gate: FHEGate =
+            configure_new_gate(self, name, key, encrypted, &self.owner_wallet.address())?;
         self.fhe_gates.push(fhe_gate.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -327,7 +331,13 @@ impl Nibble {
         evaluation_type: EvaluationType,
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, Evaluation>, Box<dyn Error>> {
-        let evaluation = configure_new_evaluation(self, name, evaluation_type, encrypted)?;
+        let evaluation = configure_new_evaluation(
+            self,
+            name,
+            evaluation_type,
+            encrypted,
+            &self.owner_wallet.address(),
+        )?;
 
         self.evaluations.push(evaluation.clone());
         Ok(AdapterHandle {
@@ -343,7 +353,13 @@ impl Nibble {
         address: Address,
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, OnChainConnector>, Box<dyn Error>> {
-        let on_chain = configure_new_onchain_connector(self, name, address, encrypted)?;
+        let on_chain = configure_new_onchain_connector(
+            self,
+            name,
+            address,
+            encrypted,
+            &self.owner_wallet.address(),
+        )?;
         self.onchain_connectors.push(on_chain.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -369,6 +385,7 @@ impl Nibble {
             http_method,
             headers,
             execution_fn.map(|f| Arc::from(f)),
+            &self.owner_wallet.address(),
         )?;
 
         self.offchain_connectors.push(off_chain.clone());
@@ -400,6 +417,7 @@ impl Nibble {
             admin_role,
             encrypted,
             model,
+            &self.owner_wallet.address(),
         )?;
 
         self.agents.push(agent.clone());
@@ -429,7 +447,7 @@ impl Nibble {
         );
 
         let method =
-            contract_instance.method::<_, ([Address; 8], Vec<u8>, U256)>("deployFromFactory", {});
+            contract_instance.method::<_, ([Address; 9], Vec<u8>, U256)>("deployFromFactory", {});
 
         match method {
             Ok(call) => {
@@ -476,8 +494,8 @@ impl Nibble {
 
                     if let Some(log) = receipt.logs.get(0) {
                         let log_data_bytes = log.data.0.clone();
-                        let return_values: ([Address; 8], Vec<u8>, U256) =
-                            <([Address; 8], Vec<u8>, U256)>::decode(&log_data_bytes)?;
+                        let return_values: ([Address; 9], Vec<u8>, U256) =
+                            <([Address; 9], Vec<u8>, U256)>::decode(&log_data_bytes)?;
 
                         self.contracts = vec![
                             ContractInfo {
@@ -511,6 +529,10 @@ impl Nibble {
                             ContractInfo {
                                 name: "NibbleAccessControl".to_string(),
                                 address: return_values.0[7],
+                            },
+                            ContractInfo {
+                                name: "NibbleWorkflows".to_string(),
+                                address: return_values.0[8],
                             },
                         ];
                         self.id = Some(return_values.1);
@@ -636,9 +658,7 @@ impl Nibble {
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
-                        to: Some(NameOrAddress::Address(
-                            NIBBLE_FACTORY_CONTRACT.parse::<Address>().unwrap(),
-                        )),
+                        to: Some(NameOrAddress::Address(storage_contract_address)),
                         gas: Some(gas_limit),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
@@ -749,9 +769,7 @@ impl Nibble {
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
-                        to: Some(NameOrAddress::Address(
-                            NIBBLE_FACTORY_CONTRACT.parse::<Address>().unwrap(),
-                        )),
+                        to: Some(NameOrAddress::Address(storage_contract_address)),
                         gas: Some(gas_limit),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
@@ -817,6 +835,36 @@ impl Nibble {
         self.count = response.count;
 
         Ok(())
+    }
+
+    pub fn create_workflow(&self, name: &str, encrypted: bool) -> Workflow {
+        Workflow {
+            id: generate_unique_id(&self.owner_wallet.address()),
+            name: name.to_string(),
+            nodes: vec![],
+            links: vec![],
+            nibble_context: Arc::new(self.clone()),
+            encrypted,
+        }
+    }
+
+    pub async fn load_workflow(&self, id: Vec<u8>) -> Result<Workflow, Box<dyn Error>> {
+        let workflow = load_workflow_from_subgraph(
+            id,
+            self.id.as_ref().unwrap().clone(),
+            self.graph_api_key.clone(),
+            self.owner_wallet.clone(),
+        )
+        .await?;
+
+        Ok(Workflow {
+            id: workflow.id,
+            name: workflow.name,
+            nodes: workflow.nodes,
+            links: workflow.links,
+            nibble_context: Arc::new(self.clone()),
+            encrypted: workflow.encrypted,
+        })
     }
 
     fn build_remove_adapters(&self) -> Result<RemoveAdapters, Box<dyn Error>> {
@@ -1083,9 +1131,7 @@ where
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
-                        to: Some(NameOrAddress::Address(
-                            NIBBLE_FACTORY_CONTRACT.parse::<Address>().unwrap(),
-                        )),
+                        to: Some(NameOrAddress::Address(contract_address)),
                         gas: Some(gas_limit),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
@@ -1311,9 +1357,7 @@ where
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
-                        to: Some(NameOrAddress::Address(
-                            NIBBLE_FACTORY_CONTRACT.parse::<Address>().unwrap(),
-                        )),
+                        to: Some(NameOrAddress::Address(contract_address)),
                         gas: Some(gas_limit),
                         value: tx_request.value,
                         data: tx_request.data.clone(),

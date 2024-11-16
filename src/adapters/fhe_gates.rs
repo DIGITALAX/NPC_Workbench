@@ -1,6 +1,11 @@
 use std::error::Error;
 
-use crate::{nibble::{Adaptable, Nibble}, utils::generate_unique_id};
+use ethers::types::H160;
+
+use crate::{
+    nibble::{Adaptable, Nibble},
+    utils::generate_unique_id,
+};
 
 #[derive(Debug, Clone)]
 pub struct FHEGate {
@@ -15,17 +20,17 @@ pub fn configure_new_gate(
     name: &str,
     key: &str,
     encrypted: bool,
+    address: &H160,
 ) -> Result<FHEGate, Box<dyn Error>> {
     let fhe_gate = FHEGate {
         name: name.to_string(),
-        id: generate_unique_id(),
+        id: generate_unique_id(address),
         key: key.to_string(),
         encrypted,
     };
     nibble.fhe_gates.push(fhe_gate.clone());
     Ok(fhe_gate)
 }
-
 
 impl Adaptable for FHEGate {
     fn name(&self) -> &str {

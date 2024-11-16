@@ -65,12 +65,13 @@ pub fn configure_new_agent(
     admin_role: bool,
     encrypted: bool,
     model: LLMModel,
+    address: &H160
 ) -> Result<Agent, Box<dyn Error>> {
     let wallet = LocalWallet::new(&mut thread_rng());
 
     let agent = Agent {
         name: name.to_string(),
-        id: generate_unique_id(),
+        id: generate_unique_id(address),
         role: role.to_string(),
         personality: personality.to_string(),
         system: system.to_string(),
