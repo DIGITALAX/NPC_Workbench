@@ -12,13 +12,13 @@ use crate::{
     },
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     ipfs::{IPFSClient, IPFSClientFactory, IPFSProvider},
+    lit::decrypt_with_private_key,
     nibble::ContractInfo,
 };
 use chrono::Utc;
 use dotenv::dotenv;
 use ethers::{
     abi::Token,
-    core::k256::ecdsa::SigningKey,
     signers::LocalWallet,
     types::{Address, U256},
     utils::hex,
@@ -26,7 +26,7 @@ use ethers::{
 use rand::Rng;
 use reqwest::{Client, Method};
 use serde_json::{from_value, json, Map, Value};
-use std::{collections::HashMap, env, error::Error, sync::Arc};
+use std::{collections::HashMap, env, error::Error, str::FromStr, sync::Arc};
 use tokio::time::Duration;
 
 pub struct GraphNibbleResponse {
@@ -100,12 +100,13 @@ pub fn generate_unique_id() -> Vec<u8> {
 
 pub async fn load_nibble_from_subgraph(
     id: Vec<u8>,
-    api_key: Option<&str>,
+    api_key: Option<String>,
+    wallet: LocalWallet,
 ) -> Result<GraphNibbleResponse, Box<dyn Error>> {
     let mut url = GRAPH_ENDPOINT_DEV.to_string();
 
     if api_key.is_some() {
-        url = GRAPH_ENDPOINT_PROD.replace("apikey", api_key.unwrap());
+        url = GRAPH_ENDPOINT_PROD.replace("apikey", &api_key.unwrap());
     }
 
     let client = Client::new();
@@ -145,17 +146,23 @@ pub async fn load_nibble_from_subgraph(
 
         if let Some(object) = json["data"]["nibble"].as_object() {
             return Ok(GraphNibbleResponse {
-                agents: build_agents(object.get("agents").unwrap()).await?,
-                conditions: build_conditions(object.get("conditions").unwrap()).await?,
-                listeners: build_listeners(object.get("listeners").unwrap()).await?,
-                fhe_gates: build_fhe_gates(object.get("fhe_gates").unwrap()).await?,
-                evaluations: build_evaluations(object.get("evaluations").unwrap()).await?,
+                agents: build_agents(object.get("agents").unwrap(), wallet.clone()).await?,
+                conditions: build_conditions(object.get("conditions").unwrap(), wallet.clone())
+                    .await?,
+                listeners: build_listeners(object.get("listeners").unwrap(), wallet.clone())
+                    .await?,
+                fhe_gates: build_fhe_gates(object.get("fhe_gates").unwrap(), wallet.clone())
+                    .await?,
+                evaluations: build_evaluations(object.get("evaluations").unwrap(), wallet.clone())
+                    .await?,
                 onchain_connectors: build_onchain_connectors(
                     object.get("onchain_connectors").unwrap(),
+                    wallet.clone(),
                 )
                 .await?,
                 offchain_connectors: build_offchain_connectors(
                     object.get("offchain_connectors").unwrap(),
+                    wallet.clone(),
                 )
                 .await?,
                 contracts: object
@@ -190,7 +197,7 @@ async fn fetch_metadata_from_ipfs(metadata_hash: &str) -> Result<Value, Box<dyn 
     Ok(metadata)
 }
 
-async fn build_agents(data: &Value) -> Result<Vec<Agent>, Box<dyn Error>> {
+async fn build_agents(data: &Value, wallet: LocalWallet) -> Result<Vec<Agent>, Box<dyn Error>> {
     let mut agents = Vec::new();
     if let Some(agent_array) = data.as_array() {
         for agent_data in agent_array {
@@ -226,7 +233,12 @@ async fn build_agents(data: &Value) -> Result<Vec<Agent>, Box<dyn Error>> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
 
             let role = metadata
                 .get("role")
@@ -257,7 +269,7 @@ async fn build_agents(data: &Value) -> Result<Vec<Agent>, Box<dyn Error>> {
                 system,
                 model,
                 encrypted,
-                wallet: LocalWallet::from(address.parse::<SigningKey>()?),
+                wallet: LocalWallet::from_str(&address)?,
                 write_role,
                 admin_role,
             });
@@ -384,7 +396,10 @@ fn parse_llm_model(metadata: &Value) -> Result<LLMModel, Box<dyn Error>> {
     }
 }
 
-async fn build_conditions(data: &Value) -> Result<Vec<Condition>, Box<dyn Error>> {
+async fn build_conditions(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<Condition>, Box<dyn Error>> {
     let mut conditions = Vec::new();
 
     if let Some(condition_array) = data.as_array() {
@@ -405,7 +420,12 @@ async fn build_conditions(data: &Value) -> Result<Vec<Condition>, Box<dyn Error>
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
 
             let name = metadata
                 .get("name")
@@ -488,7 +508,10 @@ async fn build_conditions(data: &Value) -> Result<Vec<Condition>, Box<dyn Error>
     Ok(conditions)
 }
 
-async fn build_listeners(data: &Value) -> Result<Vec<Listener>, Box<dyn Error>> {
+async fn build_listeners(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<Listener>, Box<dyn Error>> {
     let mut listeners = Vec::new();
 
     if let Some(listener_array) = data.as_array() {
@@ -509,7 +532,12 @@ async fn build_listeners(data: &Value) -> Result<Vec<Listener>, Box<dyn Error>> 
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
 
             let name = metadata
                 .get("name")
@@ -583,7 +611,10 @@ async fn build_listeners(data: &Value) -> Result<Vec<Listener>, Box<dyn Error>> 
     Ok(listeners)
 }
 
-async fn build_evaluations(data: &Value) -> Result<Vec<Evaluation>, Box<dyn Error>> {
+async fn build_evaluations(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<Evaluation>, Box<dyn Error>> {
     let mut evaluations = Vec::new();
 
     if let Some(evaluation_array) = data.as_array() {
@@ -604,7 +635,12 @@ async fn build_evaluations(data: &Value) -> Result<Vec<Evaluation>, Box<dyn Erro
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
 
             let name = metadata
                 .get("name")
@@ -662,7 +698,10 @@ async fn build_evaluations(data: &Value) -> Result<Vec<Evaluation>, Box<dyn Erro
     Ok(evaluations)
 }
 
-async fn build_fhe_gates(data: &Value) -> Result<Vec<FHEGate>, Box<dyn Error>> {
+async fn build_fhe_gates(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<FHEGate>, Box<dyn Error>> {
     let mut fhe_gates = Vec::new();
 
     if let Some(fhe_gate_array) = data.as_array() {
@@ -683,8 +722,12 @@ async fn build_fhe_gates(data: &Value) -> Result<Vec<FHEGate>, Box<dyn Error>> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
             let name = metadata
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -709,7 +752,10 @@ async fn build_fhe_gates(data: &Value) -> Result<Vec<FHEGate>, Box<dyn Error>> {
     Ok(fhe_gates)
 }
 
-async fn build_onchain_connectors(data: &Value) -> Result<Vec<OnChainConnector>, Box<dyn Error>> {
+async fn build_onchain_connectors(
+    data: &Value,
+    wallet: LocalWallet,
+) -> Result<Vec<OnChainConnector>, Box<dyn Error>> {
     let mut onchain_connectors = Vec::new();
 
     if let Some(connector_array) = data.as_array() {
@@ -738,7 +784,12 @@ async fn build_onchain_connectors(data: &Value) -> Result<Vec<OnChainConnector>,
                 continue;
             }
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
 
             let name = metadata
                 .get("name")
@@ -808,6 +859,7 @@ async fn build_onchain_connectors(data: &Value) -> Result<Vec<OnChainConnector>,
 
 pub async fn build_offchain_connectors(
     data: &Value,
+    wallet: LocalWallet,
 ) -> Result<Vec<OffChainConnector>, Box<dyn Error>> {
     let mut offchain_connectors = Vec::new();
 
@@ -837,7 +889,12 @@ pub async fn build_offchain_connectors(
                 continue;
             }
 
-            let metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+            let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
+
+            if encrypted {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
+            }
 
             let name = metadata
                 .get("name")

@@ -8,16 +8,20 @@ authors = ["Emma-Jane"]
 repository = "https://github.com/digitalax/"
 
 [dependencies]
+arrayref = "0.3.9"
 async-trait = "0.1.83"
 base64 = "0.22.1"
 chrono = "0.4.38"
 dotenv = "0.15.0"
 ethers = {version ="2.0.14", features = ["abigen", "etherscan"]}
 futures = "0.3.31"
-lit-utilities-wasm = "0.1.0"
+generic-array = "1.1.0"
+k256 = "0.13.4"
 rand = "0.8.5"
+rand_core = "0.6.4"
 reqwest = { version = "0.12.9", features = ["json"]}
 serde = "1.0.215"
 serde_json = "1.0.132"
+sha2 = "0.10.8"
 tokio = {version ="1.41.1", features = ["full"]}
 uuid = { version ="1.11.0", features = ["v4"] }

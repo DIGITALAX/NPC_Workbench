@@ -12,6 +12,7 @@ use crate::{
     },
     constants::NIBBLE_FACTORY_CONTRACT,
     ipfs::{IPFSClient, IPFSClientFactory, IPFSProvider},
+    lit::encrypt_with_public_key,
     utils::load_nibble_from_subgraph,
 };
 use ethers::{
@@ -64,6 +65,13 @@ pub struct Nibble {
     pub evaluations: Vec<Evaluation>,
     pub onchain_connectors: Vec<OnChainConnector>,
     pub offchain_connectors: Vec<OffChainConnector>,
+    pub saved_agents: Vec<Agent>,
+    pub saved_conditions: Vec<Condition>,
+    pub saved_listeners: Vec<Listener>,
+    pub saved_fhe_gates: Vec<FHEGate>,
+    pub saved_evaluations: Vec<Evaluation>,
+    pub saved_onchain_connectors: Vec<OnChainConnector>,
+    pub saved_offchain_connectors: Vec<OffChainConnector>,
     pub contracts: Vec<ContractInfo>,
     pub owner_wallet: LocalWallet,
     pub id: Option<Vec<u8>>,
@@ -71,6 +79,7 @@ pub struct Nibble {
     pub provider: Provider<Http>,
     pub chain: Chain,
     pub ipfs_client: Arc<dyn IPFSClient>,
+    pub graph_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -225,6 +234,7 @@ impl Nibble {
         ipfs_provider: IPFSProvider,
         ipfs_config: HashMap<String, String>,
         chain: Chain,
+        graph_api_key: Option<String>,
     ) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             agents: vec![],
@@ -238,8 +248,16 @@ impl Nibble {
             offchain_connectors: vec![],
             conditions: vec![],
             listeners: vec![],
+            saved_fhe_gates: vec![],
+            saved_evaluations: vec![],
+            saved_onchain_connectors: vec![],
+            saved_offchain_connectors: vec![],
+            saved_conditions: vec![],
+            saved_listeners: vec![],
+            saved_agents: vec![],
             provider: Provider::<Http>::try_from(rpc_url)?,
             chain,
+            graph_api_key,
             ipfs_client: IPFSClientFactory::create_client(ipfs_provider, ipfs_config)?,
         })
     }
@@ -512,7 +530,15 @@ impl Nibble {
                             count: self.count.clone(),
                             provider: self.provider.clone(),
                             chain: self.chain.clone(),
+                            saved_fhe_gates: vec![],
+                            saved_evaluations: vec![],
+                            saved_onchain_connectors: vec![],
+                            saved_offchain_connectors: vec![],
+                            saved_conditions: vec![],
+                            saved_listeners: vec![],
+                            saved_agents: vec![],
                             ipfs_client: self.ipfs_client.clone(),
+                            graph_api_key: self.graph_api_key.clone(),
                         })
                     } else {
                         Err("No transaction logs received.".into())
@@ -531,30 +557,35 @@ impl Nibble {
         }
     }
 
-    pub async fn load_nibble(
-        &mut self,
-        id: Vec<u8>,
-        graph_api_key: Option<&str>,
-    ) -> Result<Nibble, Box<dyn Error>> {
-        let response = load_nibble_from_subgraph(id, graph_api_key).await?;
+    pub async fn load_nibble(&mut self, id: Vec<u8>) -> Result<Nibble, Box<dyn Error>> {
+        let response =
+            load_nibble_from_subgraph(id, self.graph_api_key.clone(), self.owner_wallet.clone())
+                .await?;
         self.contracts = response.contracts;
-        self.conditions = response.conditions;
-        self.listeners = response.listeners;
-        self.offchain_connectors = response.offchain_connectors;
-        self.onchain_connectors = response.onchain_connectors;
-        self.evaluations = response.evaluations;
-        self.agents = response.agents;
-        self.fhe_gates = response.fhe_gates;
+        self.saved_conditions = response.conditions;
+        self.saved_listeners = response.listeners;
+        self.saved_offchain_connectors = response.offchain_connectors;
+        self.saved_onchain_connectors = response.onchain_connectors;
+        self.saved_evaluations = response.evaluations;
+        self.saved_agents = response.agents;
+        self.saved_fhe_gates = response.fhe_gates;
         self.count = response.count;
 
         Ok(Nibble {
-            agents: self.agents.clone(),
-            conditions: self.conditions.clone(),
-            listeners: self.listeners.clone(),
-            fhe_gates: self.fhe_gates.clone(),
-            evaluations: self.evaluations.clone(),
-            onchain_connectors: self.onchain_connectors.clone(),
-            offchain_connectors: self.offchain_connectors.clone(),
+            fhe_gates: vec![],
+            evaluations: vec![],
+            onchain_connectors: vec![],
+            offchain_connectors: vec![],
+            conditions: vec![],
+            listeners: vec![],
+            agents: vec![],
+            saved_agents: self.agents.clone(),
+            saved_conditions: self.conditions.clone(),
+            saved_listeners: self.listeners.clone(),
+            saved_fhe_gates: self.fhe_gates.clone(),
+            saved_evaluations: self.evaluations.clone(),
+            saved_onchain_connectors: self.onchain_connectors.clone(),
+            saved_offchain_connectors: self.offchain_connectors.clone(),
             contracts: self.contracts.clone(),
             owner_wallet: self.owner_wallet.clone(),
             id: self.id.clone(),
@@ -562,6 +593,7 @@ impl Nibble {
             provider: self.provider.clone(),
             chain: self.chain.clone(),
             ipfs_client: self.ipfs_client.clone(),
+            graph_api_key: self.graph_api_key.clone(),
         })
     }
 
@@ -654,6 +686,22 @@ impl Nibble {
         self.onchain_connectors.clear();
         self.offchain_connectors.clear();
         self.agents.clear();
+
+        let response = load_nibble_from_subgraph(
+            self.id.as_ref().unwrap().clone(),
+            self.graph_api_key.clone(),
+            self.owner_wallet.clone(),
+        )
+        .await?;
+        self.contracts = response.contracts;
+        self.saved_conditions = response.conditions;
+        self.saved_listeners = response.listeners;
+        self.saved_offchain_connectors = response.offchain_connectors;
+        self.saved_onchain_connectors = response.onchain_connectors;
+        self.saved_evaluations = response.evaluations;
+        self.saved_agents = response.agents;
+        self.saved_fhe_gates = response.fhe_gates;
+        self.count = response.count;
 
         Ok(())
     }
@@ -752,6 +800,22 @@ impl Nibble {
         self.offchain_connectors.clear();
         self.agents.clear();
 
+        let response = load_nibble_from_subgraph(
+            self.id.as_ref().unwrap().clone(),
+            self.graph_api_key.clone(),
+            self.owner_wallet.clone(),
+        )
+        .await?;
+        self.contracts = response.contracts;
+        self.saved_conditions = response.conditions;
+        self.saved_listeners = response.listeners;
+        self.saved_offchain_connectors = response.offchain_connectors;
+        self.saved_onchain_connectors = response.onchain_connectors;
+        self.saved_evaluations = response.evaluations;
+        self.saved_agents = response.agents;
+        self.saved_fhe_gates = response.fhe_gates;
+        self.count = response.count;
+
         Ok(())
     }
 
@@ -800,24 +864,33 @@ impl Nibble {
         Ok(ModifyAdapters {
             conditions: stream::iter(&self.conditions)
                 .then(|condition| async {
-                    let metadata = serde_json::to_vec(&condition.to_json())?;
+                    let mut metadata = serde_json::to_vec(&condition.to_json())?;
+
+                    if condition.encrypted {
+                        metadata = encrypt_with_public_key(metadata, self.owner_wallet.clone())?;
+                    }
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractCondition, Box<dyn std::error::Error>>(ContractCondition {
                         id: condition.id().to_vec(),
                         metadata: ipfs_hash,
-                        encrypted: false,
+                        encrypted: condition.encrypted,
                     })
                 })
                 .try_collect::<Vec<_>>()
                 .await?,
             listeners: stream::iter(&self.listeners)
                 .then(|listener| async {
-                    let metadata = serde_json::to_vec(&listener.to_json())?;
+                    let mut metadata = serde_json::to_vec(&listener.to_json())?;
+
+                    if listener.encrypted {
+                        metadata = encrypt_with_public_key(metadata, self.owner_wallet.clone())?;
+                    }
+
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractListener, Box<dyn std::error::Error>>(ContractListener {
                         id: listener.id().to_vec(),
                         metadata: ipfs_hash,
-                        encrypted: false,
+                        encrypted: listener.encrypted,
                     })
                 })
                 .try_collect::<Vec<_>>()
@@ -833,7 +906,7 @@ impl Nibble {
                     ),
             )
             .then(|connector| async move {
-                let (metadata, is_onchain) = match connector {
+                let (mut metadata, is_onchain) = match connector {
                     Connector::OnChain(on_chain) => (
                         serde_json::to_vec(&on_chain.to_json())
                             .map_err(|e| format!("Failed to serialize OnChainConnector: {}", e))?,
@@ -845,6 +918,14 @@ impl Nibble {
                         false,
                     ),
                 };
+                let encrypted = match connector {
+                    Connector::OnChain(on_chain) => &on_chain.encrypted,
+                    Connector::OffChain(off_chain) => &off_chain.encrypted,
+                };
+
+                if encrypted.clone() {
+                    metadata = encrypt_with_public_key(metadata, self.owner_wallet.clone())?;
+                }
 
                 let ipfs_hash = ipfs_client.upload(metadata).await?;
 
@@ -856,7 +937,7 @@ impl Nibble {
                 Ok::<ContractConnector, Box<dyn std::error::Error>>(ContractConnector {
                     id: id.clone(),
                     metadata: ipfs_hash,
-                    encrypted: false,
+                    encrypted: encrypted.clone(),
                     onChain: is_onchain,
                 })
             })
@@ -864,12 +945,17 @@ impl Nibble {
             .await?,
             agents: stream::iter(&self.agents)
                 .then(|agent| async {
-                    let metadata = serde_json::to_vec(&agent.to_json())?;
+                    let mut metadata = serde_json::to_vec(&agent.to_json())?;
+
+                    if agent.encrypted {
+                        metadata = encrypt_with_public_key(metadata, self.owner_wallet.clone())?;
+                    }
+
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractAgent, Box<dyn std::error::Error>>(ContractAgent {
                         id: agent.id().to_vec(),
                         metadata: ipfs_hash,
-                        encrypted: false,
+                        encrypted: agent.encrypted,
                         wallet: agent.wallet.address(),
                         writer: agent.write_role || agent.admin_role,
                     })
@@ -878,12 +964,16 @@ impl Nibble {
                 .await?,
             evaluations: stream::iter(&self.evaluations)
                 .then(|evaluation| async {
-                    let metadata = serde_json::to_vec(&evaluation.to_json())?;
+                    let mut metadata = serde_json::to_vec(&evaluation.to_json())?;
+                    if evaluation.encrypted {
+                        metadata = encrypt_with_public_key(metadata, self.owner_wallet.clone())?;
+                    }
+
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractEvaluation, Box<dyn std::error::Error>>(ContractEvaluation {
                         id: evaluation.id().to_vec(),
                         metadata: ipfs_hash,
-                        encrypted: false,
+                        encrypted: evaluation.encrypted,
                     })
                 })
                 .try_collect::<Vec<_>>()
@@ -1106,6 +1196,22 @@ where
             }
         };
 
+        let response = load_nibble_from_subgraph(
+            self.nibble.id.as_ref().unwrap().clone(),
+            self.nibble.graph_api_key.clone(),
+            self.nibble.owner_wallet.clone(),
+        )
+        .await?;
+        self.nibble.contracts = response.contracts;
+        self.nibble.saved_conditions = response.conditions;
+        self.nibble.saved_listeners = response.listeners;
+        self.nibble.saved_offchain_connectors = response.offchain_connectors;
+        self.nibble.saved_onchain_connectors = response.onchain_connectors;
+        self.nibble.saved_evaluations = response.evaluations;
+        self.nibble.saved_agents = response.agents;
+        self.nibble.saved_fhe_gates = response.fhe_gates;
+        self.nibble.count = response.count;
+
         Ok(())
     }
 
@@ -1317,6 +1423,22 @@ where
                 }
             }
         };
+
+        let response = load_nibble_from_subgraph(
+            self.nibble.id.as_ref().unwrap().clone(),
+            self.nibble.graph_api_key.clone(),
+            self.nibble.owner_wallet.clone(),
+        )
+        .await?;
+        self.nibble.contracts = response.contracts;
+        self.nibble.saved_conditions = response.conditions;
+        self.nibble.saved_listeners = response.listeners;
+        self.nibble.saved_offchain_connectors = response.offchain_connectors;
+        self.nibble.saved_onchain_connectors = response.onchain_connectors;
+        self.nibble.saved_evaluations = response.evaluations;
+        self.nibble.saved_agents = response.agents;
+        self.nibble.saved_fhe_gates = response.fhe_gates;
+        self.nibble.count = response.count;
 
         Ok(())
     }
