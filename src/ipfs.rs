@@ -6,8 +6,9 @@ use serde_json::Value;
 use std::{collections::HashMap, error::Error, sync::Arc};
 
 #[async_trait]
-pub trait IPFSClient {
-    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error>>;
+#[async_trait]
+pub trait IPFSClient: Send + Sync {
+    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Debug)]
@@ -23,15 +24,15 @@ struct CustomIPFSClient {
     pub headers: HashMap<String, String>,
 }
 
-impl fmt::Debug for dyn IPFSClient {
+impl fmt::Debug for dyn IPFSClient + Send + Sync {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "IPFSClient")
+        write!(f, "IPFSClient + Send + Sync")
     }
 }
 
 #[async_trait]
 impl IPFSClient for CustomIPFSClient {
-    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error>> {
+    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error + Send + Sync>> {
         let client = Client::new();
         let mut request = client.post(&self.api_url);
 
@@ -54,7 +55,7 @@ struct InfuraIPFSClient {
 
 #[async_trait]
 impl IPFSClient for InfuraIPFSClient {
-    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error>> {
+    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error + Send + Sync>> {
         let client = Client::new();
         let response = client
             .post("https://ipfs.infura.io:5001/api/v0/add")
@@ -82,7 +83,7 @@ struct PinataIPFSClient {
 
 #[async_trait]
 impl IPFSClient for PinataIPFSClient {
-    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error>> {
+    async fn upload(&self, file_data: Vec<u8>) -> Result<String, Box<dyn Error + Send + Sync>> {
         let client = Client::new();
         let response = client
             .post("https://api.pinata.cloud/pinning/pinFileToIPFS")
@@ -104,7 +105,7 @@ impl IPFSClientFactory {
     pub fn create_client(
         provider: IPFSProvider,
         config: HashMap<String, String>,
-    ) -> Result<Arc<dyn IPFSClient>, Box<dyn Error>> {
+    ) -> Result<Arc<dyn IPFSClient + Send + Sync>, Box<dyn Error + Send + Sync>> {
         match provider {
             IPFSProvider::Infura => Ok(Arc::new(InfuraIPFSClient {
                 project_id: config

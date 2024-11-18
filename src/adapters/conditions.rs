@@ -73,8 +73,8 @@ pub fn configure_new_condition(
     condition_fn: fn(Value) -> bool,
     expected_value: Option<Value>,
     encrypted: bool,
-    address: &H160
-) -> Result<Condition, Box<dyn Error>> {
+    address: &H160,
+) -> Result<Condition, Box<dyn Error + Send + Sync>> {
     let check = ConditionCheck {
         condition_fn,
         expected_value,
@@ -161,5 +161,63 @@ impl Condition {
         map.insert("check".to_string(), Value::Object(check_map));
 
         map
+    }
+
+    pub async fn check_condition(&self, nibble_context: &Nibble) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        match &self.condition_type {
+            ConditionType::OnChain {
+                contract_address,
+                function_signature,
+            } => {
+                let abi = ethers::abi::AbiParser::default()
+                    .parse_str(&format!("function {};", function_signature))?;
+                let func = abi.functions().next().ok_or("Function not found in ABI")?;
+
+                let call_data = func.encode_input(&[])?;
+                let tx_request = ethers::types::TransactionRequest {
+                    to: Some(contract_address.clone().into()),
+                    data: Some(call_data.into()),
+                    ..Default::default()
+                };
+
+                let call_result = nibble_context.provider.call_raw(&tx_request.into()).await?;
+                let is_valid = (self.check.condition_fn)(serde_json::Value::String(format!(
+                    "{:?}",
+                    call_result
+                )));
+                Ok(is_valid)
+            }
+            ConditionType::OffChain { api_url } => {
+                let response = reqwest::get(api_url).await?;
+                let json: Value = response.json().await?;
+                let is_valid = (self.check.condition_fn)(json);
+                Ok(is_valid)
+            }
+            ConditionType::InternalState { field_name } => {
+                return Err(format!(
+                    "InternalState condition with field '{}' is not implemented.",
+                    field_name
+                )
+                .into());
+            }
+            ConditionType::ContextBased { key } => {
+                return Err(format!(
+                    "ContextBased condition with key '{}' is not implemented.",
+                    key
+                )
+                .into());
+            }
+            ConditionType::TimeBased {
+                comparison_time,
+                comparison_type,
+            } => {
+                let current_time = chrono::Local::now().time();
+                let is_valid = match comparison_type {
+                    TimeComparisonType::Before => current_time < *comparison_time,
+                    TimeComparisonType::After => current_time > *comparison_time,
+                };
+                Ok(is_valid)
+            }
+        }
     }
 }

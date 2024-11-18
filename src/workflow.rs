@@ -1,21 +1,31 @@
 use crate::{
-    adapters::conditions::Condition,
-    ipfs::IPFSClient,
-    lit::encrypt_with_public_key,
-    nibble::{Adapter, Nibble},
-    utils::generate_unique_id,
+    ipfs::IPFSClient, encrypt::encrypt_with_public_key, nibble::Nibble, utils::generate_unique_id,
 };
 use ethers::{
     abi::{Abi, Token, Tokenize},
     middleware::SignerMiddleware,
     prelude::*,
-    types::H160,
     utils::hex,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use std::{error::Error, fs::File, io::Read, path::Path, sync::Arc};
+use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc};
+
+#[derive(Debug, Clone)]
+pub enum NodeAdapter {
+    OffChainConnector,
+    OnChainConnector,
+    Agent,
+}
+
+#[derive(Debug, Clone)]
+pub enum LinkAdapter {
+    Condition,
+    FHEGate,
+    Listener,
+    Evaluation,
+}
 
 #[derive(Debug, Clone)]
 pub struct Workflow {
@@ -24,23 +34,21 @@ pub struct Workflow {
     pub nodes: Vec<WorkflowNode>,
     pub links: Vec<WorkflowLink>,
     pub nibble_context: Arc<Nibble>,
+    pub dependent_workflows: Vec<Vec<u8>>,
     pub encrypted: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct WorkflowNode {
     pub id: Vec<u8>,
-    pub name: String,
-    pub adapter_type: Adapter,
+    pub adapter_type: NodeAdapter,
     pub adapter_id: Vec<u8>,
-    pub metadata: Option<String>,
 }
 
 impl WorkflowNode {
     pub fn to_json(&self) -> Map<String, Value> {
         let mut map = Map::new();
         map.insert("id".to_string(), Value::String(hex::encode(&self.id)));
-        map.insert("name".to_string(), Value::String(self.name.clone()));
         map.insert(
             "adapter_type".to_string(),
             Value::String(format!("{:?}", self.adapter_type)),
@@ -49,23 +57,23 @@ impl WorkflowNode {
             "adapter_id".to_string(),
             Value::String(hex::encode(&self.adapter_id)),
         );
-        if let Some(metadata) = &self.metadata {
-            map.insert("metadata".to_string(), Value::String(metadata.clone()));
-        }
         map
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct WorkflowLink {
+    pub id: Vec<u8>,
     pub from_node: Vec<u8>,
     pub to_node: Vec<u8>,
-    pub condition: Option<Condition>,
+    pub adapter_id: Vec<u8>,
+    pub adapter_type: LinkAdapter,
 }
 
 impl WorkflowLink {
     pub fn to_json(&self) -> Map<String, Value> {
         let mut map = Map::new();
+        map.insert("id".to_string(), Value::String(hex::encode(&self.id)));
         map.insert(
             "from_node".to_string(),
             Value::String(hex::encode(&self.from_node)),
@@ -74,9 +82,14 @@ impl WorkflowLink {
             "to_node".to_string(),
             Value::String(hex::encode(&self.to_node)),
         );
-        if let Some(condition) = &self.condition {
-            map.insert("condition".to_string(), Value::Object(condition.to_json()));
-        }
+        map.insert(
+            "adapter_id".to_string(),
+            Value::String(hex::encode(&self.to_node)),
+        );
+        map.insert(
+            "adapter_type".to_string(),
+            Value::String(format!("{:?}", self.adapter_type)),
+        );
         map
     }
 }
@@ -99,20 +112,42 @@ impl Tokenize for ModifyWorkflow {
 }
 
 impl Workflow {
-    pub fn add_node(
-        &mut self,
-        name: &str,
-        adapter_type: Adapter,
-        adapter_id: Vec<u8>,
-        metadata: Option<String>,
-        address: &H160,
-    ) -> Result<(), String> {
+    pub fn add_node(&mut self, adapter_id: Vec<u8>) -> Result<(), String> {
+        let adapter_type = if self
+            .nibble_context
+            .agents
+            .iter()
+            .chain(self.nibble_context.saved_agents.iter())
+            .find(|a| a.id == adapter_id)
+            .is_some()
+        {
+            NodeAdapter::Agent
+        } else if self
+            .nibble_context
+            .offchain_connectors
+            .iter()
+            .chain(self.nibble_context.saved_offchain_connectors.iter())
+            .find(|c| c.id == adapter_id)
+            .is_some()
+        {
+            NodeAdapter::OffChainConnector
+        } else if self
+            .nibble_context
+            .onchain_connectors
+            .iter()
+            .chain(self.nibble_context.saved_onchain_connectors.iter())
+            .find(|c| c.id == adapter_id)
+            .is_some()
+        {
+            NodeAdapter::OnChainConnector
+        } else {
+            return Err("Adapter with the given ID not found".into());
+        };
+
         self.nodes.push(WorkflowNode {
-            id: generate_unique_id(address),
-            name: name.to_string(),
-            adapter_type,
+            id: generate_unique_id(&self.nibble_context.owner_wallet.address()),
             adapter_id,
-            metadata,
+            adapter_type,
         });
         Ok(())
     }
@@ -121,17 +156,59 @@ impl Workflow {
         &mut self,
         from_node: Vec<u8>,
         to_node: Vec<u8>,
-        condition: Option<Condition>,
+        adapter_id: Vec<u8>,
     ) -> Result<(), String> {
+        let adapter_type = if self
+            .nibble_context
+            .conditions
+            .iter()
+            .chain(self.nibble_context.saved_conditions.iter())
+            .find(|l| l.id == adapter_id)
+            .is_some()
+        {
+            LinkAdapter::Condition
+        } else if self
+            .nibble_context
+            .listeners
+            .iter()
+            .chain(self.nibble_context.saved_listeners.iter())
+            .find(|l| l.id == adapter_id)
+            .is_some()
+        {
+            LinkAdapter::Listener
+        } else if self
+            .nibble_context
+            .evaluations
+            .iter()
+            .chain(self.nibble_context.saved_evaluations.iter())
+            .find(|a| a.id == adapter_id)
+            .is_some()
+        {
+            LinkAdapter::Evaluation
+        } else if self
+            .nibble_context
+            .fhe_gates
+            .iter()
+            .chain(self.nibble_context.saved_fhe_gates.iter())
+            .find(|c| c.id == adapter_id)
+            .is_some()
+        {
+            LinkAdapter::FHEGate
+        } else {
+            return Err("Adapter with the given ID not found".into());
+        };
+
         self.links.push(WorkflowLink {
+            id: generate_unique_id(&self.nibble_context.owner_wallet.address()),
             from_node,
             to_node,
-            condition,
+            adapter_id,
+            adapter_type,
         });
         Ok(())
     }
 
-    pub async fn remove(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn remove(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.nibble_context.contracts.len() < 1 {
             return Err("No contracts found. Load or create a Nibble.".into());
         }
@@ -185,7 +262,7 @@ impl Workflow {
 
                     let pending_tx = cliente.send_transaction(req, None).await.map_err(|e| {
                         eprintln!("Error sending the transaction: {:?}", e);
-                        Box::<dyn std::error::Error>::from(format!(
+                        Box::<dyn Error + Send + Sync>::from(format!(
                             "Error sending the transaction: {}",
                             e
                         ))
@@ -221,7 +298,7 @@ impl Workflow {
         Ok(())
     }
 
-    pub async fn persist(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn persist(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let client = SignerMiddleware::new(
             self.nibble_context.provider.clone(),
             self.nibble_context
@@ -275,7 +352,7 @@ impl Workflow {
 
                     let pending_tx = cliente.send_transaction(req, None).await.map_err(|e| {
                         eprintln!("Error sending the transaction: {:?}", e);
-                        Box::<dyn std::error::Error>::from(format!(
+                        Box::<dyn Error + Send + Sync>::from(format!(
                             "Error sending the transaction: {}",
                             e
                         ))
@@ -307,40 +384,198 @@ impl Workflow {
         Ok(())
     }
 
-    pub async fn execute(&self) -> Result<(), Box<dyn Error>> {
-        for node in &self.nodes {
-            if let Some(link) = self.links.iter().find(|conn| conn.to_node == node.id) {
-                if let Some(condition) = &link.condition {
-                    if !(condition.check.condition_fn)(serde_json::json!(true)) {
-                        continue;
+    async fn execute(&self, context: &mut ExecutionContext) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let execution_order = self.topological_sort()?;
+
+        for node_id in execution_order {
+            let node = self
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .ok_or("Node not found in execution order")?;
+
+            for link in self.links.iter().filter(|link| link.to_node == node_id) {
+                match link.adapter_type {
+                    LinkAdapter::Listener => {
+                        let listener = self
+                            .nibble_context
+                            .listeners
+                            .iter()
+                            .find(|l| l.id == link.adapter_id)
+                            .ok_or("Listener not found")?
+                            .clone();
+
+                        let workflow = Arc::new(self.clone());
+                        let to_node = link.to_node.clone();
+
+                        tokio::spawn(async move {
+                            if let Err(e) = listener.listen_and_trigger(workflow, to_node).await {
+                                eprintln!("Error in listener: {}", e);
+                            }
+                        });
+                    }
+                    LinkAdapter::Condition => {
+                        let condition = self
+                            .nibble_context
+                            .conditions
+                            .iter()
+                            .chain(self.nibble_context.saved_conditions.iter())
+                            .find(|c| c.id == link.adapter_id)
+                            .ok_or("Condition not found")?;
+
+                        let is_valid = condition.check_condition(&self.nibble_context).await?;
+
+                        if !is_valid {
+                            return Err(format!(
+                            "Node {:?} execution failed due to failed condition on link from {:?} to {:?}",
+                            node.adapter_id,
+                            link.from_node,
+                            link.to_node
+                        )
+                        .into());
+                        }
+                    }
+                    LinkAdapter::Evaluation => {
+                        let evaluation = self
+                            .nibble_context
+                            .evaluations
+                            .iter()
+                            .chain(self.nibble_context.saved_evaluations.iter())
+                            .find(|c| c.id == link.adapter_id)
+                            .ok_or("Evaluation not found")?;
+
+                        let is_valid = evaluation.check_evaluation().await?;
+
+                        if !is_valid {
+                            return Err(format!(
+                        "Node {:?} execution failed due to failed evaluation on link from {:?} to {:?}",
+                        node.adapter_id,
+                        link.from_node,
+                        link.to_node
+                    )
+                    .into());
+                        }
+                    }
+                    LinkAdapter::FHEGate => {
+                        let fhe_gate = self
+                            .nibble_context
+                            .fhe_gates
+                            .iter()
+                            .chain(self.nibble_context.saved_fhe_gates.iter())
+                            .find(|c| c.id == link.adapter_id)
+                            .ok_or("FHE gate not found")?;
+
+                        let is_valid = fhe_gate.check_fhe_gate().await?;
+
+                        if !is_valid {
+                            return Err(format!(
+                    "Node {:?} FHE gate failed due to failed evaluation on link from {:?} to {:?}",
+                    node.adapter_id,
+                    link.from_node,
+                    link.to_node
+                )
+                            .into());
+                        }
                     }
                 }
             }
 
             match node.adapter_type {
-                Adapter::Agent => {
+                NodeAdapter::Agent => {
                     let agent = self
                         .nibble_context
                         .agents
                         .iter()
                         .find(|a| a.id == node.adapter_id)
                         .ok_or("Agent not found")?;
-                    println!("Executing Agent: {:?}", agent);
+
+                    let input_prompt = "Your input prompt for the agent";
+                    let output = agent.execute_agent(input_prompt).await?;
+                    println!("Agent execution result: {}", output);
                 }
-                Adapter::Condition => {}
-                Adapter::Listener => {}
-                Adapter::FHEGate => {}
-                Adapter::Evaluation => {}
-                Adapter::OnChainConnector | Adapter::OffChainConnector => {}
+                NodeAdapter::OnChainConnector => {
+                    let connector = self
+                        .nibble_context
+                        .onchain_connectors
+                        .iter()
+                        .find(|c| c.id == node.adapter_id)
+                        .ok_or("OnChainConnector not found")?;
+
+                    let client = Arc::new(SignerMiddleware::new(
+                        self.nibble_context.provider.clone(),
+                        self.nibble_context.owner_wallet.clone(),
+                    ));
+
+                    connector.execute_onchain_connector(client).await?;
+                }
+                NodeAdapter::OffChainConnector => {
+                    let connector = self
+                        .nibble_context
+                        .offchain_connectors
+                        .iter()
+                        .find(|c| c.id == node.adapter_id)
+                        .ok_or("OffChainConnector not found")?;
+
+                    let response = connector.execute_offchain_connector(None).await?;
+                    println!("OffChainConnector response: {:?}", response);
+                }
             }
         }
+
+        Ok(())
+    }
+
+    pub async fn execute_node(&self, node_id: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let node = self
+            .nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or("Node not found for execution")?;
+
+        match node.adapter_type {
+            NodeAdapter::Agent => {
+                let agent = self
+                    .nibble_context
+                    .agents
+                    .iter()
+                    .find(|a| a.id == node.adapter_id)
+                    .ok_or("Agent not found")?;
+                let input_prompt = "Your input prompt for the agent";
+                let output = agent.execute_agent(input_prompt).await?;
+                println!("Agent execution result: {}", output);
+            }
+            NodeAdapter::OnChainConnector => {
+                let connector = self
+                    .nibble_context
+                    .onchain_connectors
+                    .iter()
+                    .find(|c| c.id == node.adapter_id)
+                    .ok_or("OnChainConnector not found")?;
+                let client = Arc::new(SignerMiddleware::new(
+                    self.nibble_context.provider.clone(),
+                    self.nibble_context.owner_wallet.clone(),
+                ));
+                connector.execute_onchain_connector(client).await?;
+            }
+            NodeAdapter::OffChainConnector => {
+                let connector = self
+                    .nibble_context
+                    .offchain_connectors
+                    .iter()
+                    .find(|c| c.id == node.adapter_id)
+                    .ok_or("OffChainConnector not found")?;
+                let response = connector.execute_offchain_connector(None).await?;
+                println!("OffChainConnector response: {:?}", response);
+            }
+        }
+
         Ok(())
     }
 
     async fn build_workflow(
         &self,
         ipfs_client: &dyn IPFSClient,
-    ) -> Result<ModifyWorkflow, Box<dyn Error>> {
+    ) -> Result<ModifyWorkflow, Box<dyn Error + Send + Sync>> {
         let mut metadata_map = Map::new();
         metadata_map.insert(
             "links".to_string(),
@@ -364,7 +599,10 @@ impl Workflow {
         let mut metadata = serde_json::to_vec(&metadata_map)?;
 
         if self.encrypted {
-            metadata = encrypt_with_public_key(metadata, self.nibble_context.owner_wallet.clone())?;
+            metadata = encrypt_with_public_key(metadata, self.nibble_context.owner_wallet.clone())
+                .map_err(|e| -> Box<dyn Error + Send + Sync> {
+                    Box::<dyn Error + Send + Sync>::from(e)
+                })?;
         }
         let ipfs_hash = ipfs_client.upload(metadata).await?;
 
@@ -373,5 +611,97 @@ impl Workflow {
             encrypted: self.encrypted,
             metadata: ipfs_hash,
         })
+    }
+
+    fn topological_sort(&self) -> Result<Vec<Vec<u8>>, String> {
+        let mut in_degree: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut graph: HashMap<Vec<u8>, Vec<Vec<u8>>> = HashMap::new();
+
+        for node in &self.nodes {
+            in_degree.insert(node.id.clone(), 0);
+            graph.insert(node.id.clone(), Vec::new());
+        }
+        for link in &self.links {
+            graph
+                .entry(link.from_node.clone())
+                .or_default()
+                .push(link.to_node.clone());
+            *in_degree.entry(link.to_node.clone()).or_default() += 1;
+        }
+
+        let mut stack: Vec<Vec<u8>> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut sorted = Vec::new();
+
+        while let Some(node) = stack.pop() {
+            sorted.push(node.clone());
+            if let Some(neighbors) = graph.get(&node) {
+                for neighbor in neighbors {
+                    if let Some(degree) = in_degree.get_mut(neighbor) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            stack.push(neighbor.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if sorted.len() != self.nodes.len() {
+            return Err("Cyclic dependency detected in workflow".to_string());
+        }
+
+        Ok(sorted)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionContext {
+    pub data_store: HashMap<String, Value>,
+}
+
+impl ExecutionContext {
+    pub fn new() -> Self {
+        Self {
+            data_store: HashMap::new(),
+        }
+    }
+
+    pub fn set(&mut self, key: &str, value: Value) {
+        self.data_store.insert(key.to_string(), value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.data_store.get(key)
+    }
+}
+
+pub struct WorkflowManager {
+    pub workflows: HashMap<Vec<u8>, Workflow>,
+}
+
+impl WorkflowManager {
+    pub async fn execute_workflow(
+        &mut self,
+        workflow_id: Vec<u8>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut context = ExecutionContext::new();
+
+        if let Some(workflow) = self.workflows.get(&workflow_id) {
+            workflow.execute(&mut context).await?;
+
+            for dependent_id in &workflow.dependent_workflows {
+                if let Some(dependent_workflow) = self.workflows.get(dependent_id) {
+                    dependent_workflow.execute(&mut context).await?;
+                }
+            }
+        } else {
+            return Err(format!("Workflow with ID {:?} not found", workflow_id).into());
+        }
+
+        Ok(())
     }
 }

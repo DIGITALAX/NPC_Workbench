@@ -50,8 +50,8 @@ pub fn configure_new_onchain_connector(
     name: &str,
     address: Address,
     encrypted: bool,
-    owner_address: &H160
-) -> Result<OnChainConnector, Box<dyn Error>> {
+    owner_address: &H160,
+) -> Result<OnChainConnector, Box<dyn Error + Send + Sync>> {
     let on_chain = OnChainConnector {
         name: name.to_string(),
         id: generate_unique_id(owner_address),
@@ -69,7 +69,7 @@ impl OnChainConnector {
         function_signature: &str,
         params: Vec<Value>,
         gas_options: GasOptions,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.transactions.push(OnChainTransaction {
             function_signature: function_signature.to_string(),
             params,
@@ -81,7 +81,7 @@ impl OnChainConnector {
     pub async fn execute_transactions(
         &self,
         client: Arc<SignerMiddleware<Provider<Http>, LocalWallet>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         for tx in &self.transactions {
             let encoded_data = self.encode_function_call(&tx.function_signature, &tx.params)?;
 
@@ -117,7 +117,7 @@ impl OnChainConnector {
         &self,
         function_signature: &str,
         params: &[Value],
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let abi =
             abi::AbiParser::default().parse_str(&format!("function {};", function_signature))?;
         let func = abi.functions().next().ok_or("Function not found")?;
@@ -129,18 +129,7 @@ impl OnChainConnector {
 
         Ok(func.encode_input(&tokens)?)
     }
-}
 
-impl Adaptable for OnChainConnector {
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn id(&self) -> &Vec<u8> {
-        &self.id
-    }
-}
-
-impl OnChainConnector {
     pub fn to_json(&self) -> Map<String, Value> {
         let mut map = Map::new();
         map.insert("name".to_string(), Value::String(self.name.clone()));
@@ -192,5 +181,59 @@ impl OnChainConnector {
 
         map.insert("transactions".to_string(), Value::Array(transactions));
         map
+    }
+
+    pub async fn execute_onchain_connector(
+        &self,
+        client: Arc<SignerMiddleware<Provider<Http>, LocalWallet>>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for tx in &self.transactions {
+            let encoded_data = self.encode_function_call(&tx.function_signature, &tx.params)?;
+
+            let mut tx_request = Eip1559TransactionRequest::new()
+                .to(NameOrAddress::Address(self.address))
+                .data(encoded_data);
+
+            if let Some(gas_limit) = tx.gas_options.gas_limit {
+                tx_request = tx_request.gas(gas_limit);
+            }
+            if let Some(max_fee) = tx.gas_options.max_fee_per_gas {
+                tx_request = tx_request.max_fee_per_gas(max_fee);
+            }
+            if let Some(priority_fee) = tx.gas_options.max_priority_fee_per_gas {
+                tx_request = tx_request.max_priority_fee_per_gas(priority_fee);
+            }
+            if let Some(nonce) = tx.gas_options.nonce {
+                tx_request = tx_request.nonce(nonce);
+            }
+
+            println!("Sending transaction to address: {:?}", self.address);
+            let pending_tx = client.send_transaction(tx_request, None).await?;
+            let receipt = pending_tx.await?;
+
+            match receipt {
+                Some(r) if r.status == Some(U64::from(1)) => {
+                    println!("Transaction succeeded with hash: {:?}", r.transaction_hash);
+                }
+                Some(r) => {
+                    println!(
+                        "Transaction failed with status {:?}, hash: {:?}",
+                        r.status, r.transaction_hash
+                    );
+                    return Err("Transaction failed".into());
+                }
+                None => return Err("Transaction was not mined".into()),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Adaptable for OnChainConnector {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn id(&self) -> &Vec<u8> {
+        &self.id
     }
 }

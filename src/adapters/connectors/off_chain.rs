@@ -5,7 +5,10 @@ use ethers::types::H160;
 use reqwest::{Client, Method};
 use serde_json::{Map, Value};
 
-use crate::{nibble::{Adaptable, Nibble}, utils::generate_unique_id};
+use crate::{
+    nibble::{Adaptable, Nibble},
+    utils::generate_unique_id,
+};
 
 #[derive(Clone)]
 pub struct OffChainConnector {
@@ -15,7 +18,7 @@ pub struct OffChainConnector {
     pub encrypted: bool,
     pub http_method: Method,
     pub headers: Option<HashMap<String, String>>,
-    pub execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
+    pub execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>>,
 }
 
 impl fmt::Debug for OffChainConnector {
@@ -34,12 +37,73 @@ impl fmt::Debug for OffChainConnector {
 impl OffChainConnector {
     pub fn set_execution_fn<F>(&mut self, f: F)
     where
-        F: Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync + 'static,
+        F: Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
     {
         self.execution_fn = Some(Arc::new(f));
     }
 
-    pub async fn execute_request(&self, payload: Option<Value>) -> Result<Value, Box<dyn Error>> {
+    pub async fn execute_request(&self, payload: Option<Value>) -> Result<Value, Box<dyn Error + Send + Sync>> {
+        let client = Client::new();
+        let mut request = client.request(self.http_method.clone(), &self.api_url);
+
+        if let Some(headers) = &self.headers {
+            for (key, value) in headers {
+                request = request.header(key, value);
+            }
+        }
+
+        if self.http_method == Method::POST {
+            if let Some(data) = payload {
+                request = request
+                    .header("Content-Type", "application/json")
+                    .body(data.to_string());
+            }
+        }
+
+        let response = request.send().await?;
+        let response_data: Value = response.json().await?;
+
+        if let Some(exec_fn) = &self.execution_fn {
+            return exec_fn(response_data);
+        }
+
+        Ok(response_data)
+    }
+
+    pub fn to_json(&self) -> Map<String, Value> {
+        let mut map = Map::new();
+        map.insert("name".to_string(), Value::String(self.name.clone()));
+        map.insert("api_url".to_string(), Value::String(self.api_url.clone()));
+        map.insert("public".to_string(), Value::Bool(self.encrypted));
+        map.insert(
+            "http_method".to_string(),
+            Value::String(self.http_method.as_str().to_string()),
+        );
+
+        if let Some(headers) = &self.headers {
+            let headers_map: Map<String, Value> = headers
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect();
+            map.insert("headers".to_string(), Value::Object(headers_map));
+        }
+
+        if self.execution_fn.is_some() {
+            map.insert(
+                "execution_fn".to_string(),
+                Value::String("Function pointer (not serializable)".to_string()),
+            );
+        }
+
+        map
+    }
+
+    pub async fn execute_offchain_connector(
+        &self,
+        payload: Option<Value>,
+    ) -> Result<Value, Box<dyn Error + Send + Sync>> {
+        println!("Executing OffChainConnector: {}", self.name);
+
         let client = Client::new();
         let mut request = client.request(self.http_method.clone(), &self.api_url);
 
@@ -75,9 +139,9 @@ pub fn configure_new_offchain_connector(
     encrypted: bool,
     http_method: Method,
     headers: Option<HashMap<String, String>>,
-    execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
-    address: &H160
-) -> Result<OffChainConnector, Box<dyn Error>> {
+    execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>>,
+    address: &H160,
+) -> Result<OffChainConnector, Box<dyn Error + Send + Sync>> {
     let off_chain = OffChainConnector {
         name: name.to_string(),
         id: generate_unique_id(address),
@@ -97,35 +161,5 @@ impl Adaptable for OffChainConnector {
     }
     fn id(&self) -> &Vec<u8> {
         &self.id
-    }
-}
-
-impl OffChainConnector {
-    pub fn to_json(&self) -> Map<String, Value> {
-        let mut map = Map::new();
-        map.insert("name".to_string(), Value::String(self.name.clone()));
-        map.insert("api_url".to_string(), Value::String(self.api_url.clone()));
-        map.insert("public".to_string(), Value::Bool(self.encrypted));
-        map.insert(
-            "http_method".to_string(),
-            Value::String(self.http_method.as_str().to_string()),
-        );
-
-        if let Some(headers) = &self.headers {
-            let headers_map: Map<String, Value> = headers
-                .iter()
-                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-                .collect();
-            map.insert("headers".to_string(), Value::Object(headers_map));
-        }
-
-        if self.execution_fn.is_some() {
-            map.insert(
-                "execution_fn".to_string(),
-                Value::String("Function pointer (not serializable)".to_string()),
-            );
-        }
-
-        map
     }
 }

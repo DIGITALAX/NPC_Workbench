@@ -66,8 +66,8 @@ pub fn configure_new_evaluation(
     name: &str,
     evaluation_type: EvaluationType,
     encrypted: bool,
-    address: &H160
-) -> Result<Evaluation, Box<dyn Error>> {
+    address: &H160,
+) -> Result<Evaluation, Box<dyn Error + Send + Sync>> {
     let evaluation = Evaluation {
         name: name.to_string(),
         encrypted,
@@ -150,5 +150,46 @@ impl Evaluation {
             self.evaluation_type.to_json(),
         );
         map
+    }
+
+    pub async fn check_evaluation(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        match &self.evaluation_type {
+            EvaluationType::HumanJudge {
+                prompt,
+                approval_required,
+            } => {
+                println!("HumanJudge Prompt: {}", prompt);
+                if *approval_required {
+                    println!("Approval required for prompt.");
+
+                    Ok(true)
+                } else {
+                    println!("No approval required. Automatically passing.");
+                    Ok(true)
+                }
+            }
+            EvaluationType::LLMJudge {
+                model_name,
+                prompt_template,
+                approval_threshold,
+            } => {
+                println!(
+                    "LLMJudge Model: {}, Prompt Template: {}",
+                    model_name, prompt_template
+                );
+                let simulated_score = 0.8;
+                println!(
+                    "Simulated LLM score: {} (Threshold: {})",
+                    simulated_score, approval_threshold
+                );
+                Ok(simulated_score >= *approval_threshold)
+            }
+            EvaluationType::ContextualJudge { context_fn } => {
+                let context = serde_json::json!({ "example": "value" });
+                let is_valid = context_fn(context);
+                println!("ContextualJudge Result: {}", is_valid);
+                Ok(is_valid)
+            }
+        }
     }
 }

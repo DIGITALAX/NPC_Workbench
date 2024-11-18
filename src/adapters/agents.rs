@@ -4,7 +4,7 @@ use crate::{
 };
 use ethers::{core::rand::thread_rng, prelude::*};
 use serde_json::{Map, Value};
-use std::error::Error;
+use std::{error::Error, str::FromStr};
 
 #[derive(Debug, Clone)]
 pub enum LLMModel {
@@ -53,6 +53,8 @@ pub struct Agent {
     pub write_role: bool,
     pub admin_role: bool,
     pub encrypted: bool,
+    pub lens_account: Option<String>,
+    pub farcaster_account: Option<String>,
 }
 
 pub fn configure_new_agent(
@@ -65,9 +67,16 @@ pub fn configure_new_agent(
     admin_role: bool,
     encrypted: bool,
     model: LLMModel,
-    address: &H160
-) -> Result<Agent, Box<dyn Error>> {
-    let wallet = LocalWallet::new(&mut thread_rng());
+    address: &H160,
+    wallet_address: Option<&H160>,
+    lens_account: Option<&str>,
+    farcaster_account: Option<&str>,
+) -> Result<Agent, Box<dyn Error + Send + Sync>> {
+    let mut wallet = LocalWallet::new(&mut thread_rng());
+
+    if wallet_address.is_some() {
+        wallet = LocalWallet::from_str(&wallet_address.unwrap().to_string())?
+    }
 
     let agent = Agent {
         name: name.to_string(),
@@ -80,6 +89,8 @@ pub fn configure_new_agent(
         admin_role,
         encrypted,
         wallet: wallet.clone(),
+        lens_account: lens_account.map(|s| s.to_string()),
+        farcaster_account: farcaster_account.map(|s| s.to_string()),
     };
 
     nibble.agents.push(agent.clone());
@@ -226,8 +237,131 @@ impl Agent {
             "wallet_address".to_string(),
             Value::String(format!("{:?}", self.wallet.address())),
         );
+        map.insert(
+            "lens_account".to_string(),
+            Value::String(self.lens_account.clone().unwrap_or_default()),
+        );
+        map.insert(
+            "farcaster_account".to_string(),
+            Value::String(self.farcaster_account.clone().unwrap_or_default()),
+        );
         map.insert("write_role".to_string(), Value::Bool(self.write_role));
         map.insert("admin_role".to_string(), Value::Bool(self.admin_role));
         map
+    }
+
+    pub async fn execute_agent(
+        &self,
+        input_prompt: &str,
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+        match &self.model {
+            LLMModel::OpenAI {
+                api_key,
+                model,
+                temperature,
+                max_tokens,
+                top_p,
+                frequency_penalty,
+                presence_penalty,
+                system_prompt,
+            } => {
+                let prompt = if let Some(system) = system_prompt {
+                    format!("{}\n{}", system, input_prompt)
+                } else {
+                    input_prompt.to_string()
+                };
+
+                let client = reqwest::Client::new();
+                let response = client
+                    .post("https://api.openai.com/v1/completions")
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .json(&serde_json::json!({
+                        "model": model,
+                        "prompt": prompt,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "top_p": top_p,
+                        "frequency_penalty": frequency_penalty,
+                        "presence_penalty": presence_penalty
+                    }))
+                    .send()
+                    .await?;
+
+                let response_json: Value = response.json().await?;
+                let completion = response_json["choices"][0]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                Ok(completion)
+            }
+            LLMModel::Claude {
+                api_key,
+                model,
+                temperature,
+                max_tokens,
+                top_k,
+                top_p,
+                system_prompt,
+            } => {
+                let prompt = if let Some(system) = system_prompt {
+                    format!("{}\n{}", system, input_prompt)
+                } else {
+                    input_prompt.to_string()
+                };
+
+                let client = reqwest::Client::new();
+                let response = client
+                    .post(format!("https://api.anthropic.com/v1/claude/{model}"))
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .json(&serde_json::json!({
+                        "prompt": prompt,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "top_k": top_k,
+                        "top_p": top_p
+                    }))
+                    .send()
+                    .await?;
+
+                let response_json: Value = response.json().await?;
+                let completion = response_json["completion"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                Ok(completion)
+            }
+            LLMModel::Ollama {
+                api_key,
+                model,
+                temperature,
+                max_tokens,
+                top_p,
+                frequency_penalty,
+                presence_penalty,
+            } => {
+                let client = reqwest::Client::new();
+                let response = client
+                    .post("https://api.ollama.ai/generate")
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .json(&serde_json::json!({
+                        "model": model,
+                        "prompt": input_prompt,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "top_p": top_p,
+                        "frequency_penalty": frequency_penalty,
+                        "presence_penalty": presence_penalty
+                    }))
+                    .send()
+                    .await?;
+
+                let response_json: Value = response.json().await?;
+                let completion = response_json["text"].as_str().unwrap_or("").to_string();
+                Ok(completion)
+            }
+            LLMModel::Other { config } => {
+                return Err("Execution for Other model type is not implemented.".into());
+            }
+        }
     }
 }

@@ -21,7 +21,7 @@ pub fn configure_new_gate(
     key: &str,
     encrypted: bool,
     address: &H160,
-) -> Result<FHEGate, Box<dyn Error>> {
+) -> Result<FHEGate, Box<dyn Error + Send + Sync>> {
     let fhe_gate = FHEGate {
         name: name.to_string(),
         id: generate_unique_id(address),
@@ -38,5 +38,11 @@ impl Adaptable for FHEGate {
     }
     fn id(&self) -> &Vec<u8> {
         &self.id
+    }
+}
+
+impl FHEGate {
+    pub async fn check_fhe_gate(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        Ok(true)
     }
 }

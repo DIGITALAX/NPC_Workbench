@@ -11,8 +11,8 @@ use crate::{
         listeners::{configure_new_listener, Listener, ListenerType},
     },
     constants::NIBBLE_FACTORY_CONTRACT,
+    encrypt::encrypt_with_public_key,
     ipfs::{IPFSClient, IPFSClientFactory, IPFSProvider},
-    lit::encrypt_with_public_key,
     utils::{generate_unique_id, load_nibble_from_subgraph, load_workflow_from_subgraph},
     workflow::Workflow,
 };
@@ -25,7 +25,8 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc};
+use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc, vec};
+
 pub struct AdapterHandle<'a, T>
 where
     T: Adaptable,
@@ -79,7 +80,7 @@ pub struct Nibble {
     pub count: U256,
     pub provider: Provider<Http>,
     pub chain: Chain,
-    pub ipfs_client: Arc<dyn IPFSClient>,
+    pub ipfs_client: Arc<dyn IPFSClient + Send + Sync>,
     pub graph_api_key: Option<String>,
 }
 
@@ -210,7 +211,6 @@ pub struct ContractConnector {
     pub id: Vec<u8>,
     pub metadata: String,
     pub encrypted: bool,
-
     pub onChain: bool,
 }
 
@@ -236,7 +236,7 @@ impl Nibble {
         ipfs_config: HashMap<String, String>,
         chain: Chain,
         graph_api_key: Option<String>,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(Self {
             agents: vec![],
             contracts: vec![],
@@ -271,7 +271,7 @@ impl Nibble {
         condition_fn: fn(Value) -> bool,
         expected_value: Option<Value>,
         encrypted: bool,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         configure_new_listener(
             self,
             name,
@@ -291,7 +291,7 @@ impl Nibble {
         condition_fn: fn(Value) -> bool,
         expected_value: Option<Value>,
         encrypted: bool,
-    ) -> Result<AdapterHandle<'_, Condition>, Box<dyn Error>> {
+    ) -> Result<AdapterHandle<'_, Condition>, Box<dyn Error + Send + Sync>> {
         let condition: Condition = configure_new_condition(
             self,
             name,
@@ -314,7 +314,7 @@ impl Nibble {
         name: &str,
         key: &str,
         encrypted: bool,
-    ) -> Result<AdapterHandle<'_, FHEGate>, Box<dyn Error>> {
+    ) -> Result<AdapterHandle<'_, FHEGate>, Box<dyn Error + Send + Sync>> {
         let fhe_gate: FHEGate =
             configure_new_gate(self, name, key, encrypted, &self.owner_wallet.address())?;
         self.fhe_gates.push(fhe_gate.clone());
@@ -330,7 +330,7 @@ impl Nibble {
         name: &str,
         evaluation_type: EvaluationType,
         encrypted: bool,
-    ) -> Result<AdapterHandle<'_, Evaluation>, Box<dyn Error>> {
+    ) -> Result<AdapterHandle<'_, Evaluation>, Box<dyn Error + Send + Sync>> {
         let evaluation = configure_new_evaluation(
             self,
             name,
@@ -352,7 +352,7 @@ impl Nibble {
         name: &str,
         address: Address,
         encrypted: bool,
-    ) -> Result<AdapterHandle<'_, OnChainConnector>, Box<dyn Error>> {
+    ) -> Result<AdapterHandle<'_, OnChainConnector>, Box<dyn Error + Send + Sync>> {
         let on_chain = configure_new_onchain_connector(
             self,
             name,
@@ -375,8 +375,10 @@ impl Nibble {
         encrypted: bool,
         http_method: Method,
         headers: Option<HashMap<String, String>>,
-        execution_fn: Option<Box<dyn Fn(Value) -> Result<Value, Box<dyn Error>> + Send + Sync>>,
-    ) -> Result<AdapterHandle<'_, OffChainConnector>, Box<dyn Error>> {
+        execution_fn: Option<
+            Box<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
+        >,
+    ) -> Result<AdapterHandle<'_, OffChainConnector>, Box<dyn Error + Send + Sync>> {
         let off_chain = configure_new_offchain_connector(
             self,
             name,
@@ -406,7 +408,10 @@ impl Nibble {
         admin_role: bool,
         model: LLMModel,
         encrypted: bool,
-    ) -> Result<AdapterHandle<'_, Agent>, Box<dyn Error>> {
+        agent_wallet: Option<&H160>,
+        lens_account: Option<&str>,
+        farcaster_account: Option<&str>,
+    ) -> Result<AdapterHandle<'_, Agent>, Box<dyn Error + Send + Sync>> {
         let agent = agents::configure_new_agent(
             self,
             name,
@@ -418,6 +423,9 @@ impl Nibble {
             encrypted,
             model,
             &self.owner_wallet.address(),
+            agent_wallet,
+            farcaster_account,
+            lens_account,
         )?;
 
         self.agents.push(agent.clone());
@@ -428,7 +436,7 @@ impl Nibble {
         })
     }
 
-    pub async fn create_nibble(&mut self) -> Result<Nibble, Box<dyn Error>> {
+    pub async fn create_nibble(&mut self) -> Result<Nibble, Box<dyn Error + Send + Sync>> {
         let client = SignerMiddleware::new(
             self.provider.clone(),
             self.owner_wallet.clone().with_chain_id(self.chain),
@@ -579,7 +587,10 @@ impl Nibble {
         }
     }
 
-    pub async fn load_nibble(&mut self, id: Vec<u8>) -> Result<Nibble, Box<dyn Error>> {
+    pub async fn load_nibble(
+        &mut self,
+        id: Vec<u8>,
+    ) -> Result<Nibble, Box<dyn Error + Send + Sync>> {
         let response =
             load_nibble_from_subgraph(id, self.graph_api_key.clone(), self.owner_wallet.clone())
                 .await?;
@@ -619,7 +630,7 @@ impl Nibble {
         })
     }
 
-    pub async fn remove_adapters(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn remove_adapters(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.contracts.len() < 1 {
             return Err("No contracts found. Load or create a Nibble.".into());
         }
@@ -670,7 +681,7 @@ impl Nibble {
 
                     let pending_tx = cliente.send_transaction(req, None).await.map_err(|e| {
                         eprintln!("Error sending the transaction: {:?}", e);
-                        Box::<dyn std::error::Error>::from(format!(
+                        Box::<dyn Error + Send + Sync>::from(format!(
                             "Error sending the transaction: {}",
                             e
                         ))
@@ -726,7 +737,7 @@ impl Nibble {
         Ok(())
     }
 
-    pub async fn persist_adapters(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn persist_adapters(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.contracts.len() < 1 {
             return Err("No contracts found. Load or create a Nibble.".into());
         }
@@ -781,7 +792,7 @@ impl Nibble {
 
                     let pending_tx = cliente.send_transaction(req, None).await.map_err(|e| {
                         eprintln!("Error sending the transaction: {:?}", e);
-                        Box::<dyn std::error::Error>::from(format!(
+                        Box::<dyn Error + Send + Sync>::from(format!(
                             "Error sending the transaction: {}",
                             e
                         ))
@@ -823,7 +834,8 @@ impl Nibble {
             self.graph_api_key.clone(),
             self.owner_wallet.clone(),
         )
-        .await?;
+        .await
+        .map_err(|e| Box::<dyn Error + Send + Sync>::from(e))?;
         self.contracts = response.contracts;
         self.saved_conditions = response.conditions;
         self.saved_listeners = response.listeners;
@@ -843,17 +855,24 @@ impl Nibble {
             name: name.to_string(),
             nodes: vec![],
             links: vec![],
+            dependent_workflows: vec![],
             nibble_context: Arc::new(self.clone()),
             encrypted,
         }
     }
 
-    pub async fn load_workflow(&self, id: Vec<u8>) -> Result<Workflow, Box<dyn Error>> {
+    pub async fn load_workflow(
+        &self,
+        id: Vec<u8>,
+    ) -> Result<Workflow, Box<dyn Error + Send + Sync>> {
+        if self.contracts.len() < 1 {
+            return Err("No contracts found. Load or create a Nibble firsty.".into());
+        }
+
         let workflow = load_workflow_from_subgraph(
             id,
             self.id.as_ref().unwrap().clone(),
             self.graph_api_key.clone(),
-            self.owner_wallet.clone(),
         )
         .await?;
 
@@ -862,12 +881,13 @@ impl Nibble {
             name: workflow.name,
             nodes: workflow.nodes,
             links: workflow.links,
+            dependent_workflows: workflow.dependent_workflows,
             nibble_context: Arc::new(self.clone()),
             encrypted: workflow.encrypted,
         })
     }
 
-    fn build_remove_adapters(&self) -> Result<RemoveAdapters, Box<dyn Error>> {
+    fn build_remove_adapters(&self) -> Result<RemoveAdapters, Box<dyn Error + Send + Sync>> {
         Ok(RemoveAdapters {
             conditions: self
                 .conditions
@@ -908,7 +928,7 @@ impl Nibble {
     async fn build_modify_adapters(
         &self,
         ipfs_client: &dyn IPFSClient,
-    ) -> Result<ModifyAdapters, Box<dyn Error>> {
+    ) -> Result<ModifyAdapters, Box<dyn Error + Send + Sync>> {
         Ok(ModifyAdapters {
             conditions: stream::iter(&self.conditions)
                 .then(|condition| async {
@@ -918,7 +938,7 @@ impl Nibble {
                         metadata = encrypt_with_public_key(metadata, self.owner_wallet.clone())?;
                     }
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
-                    Ok::<ContractCondition, Box<dyn std::error::Error>>(ContractCondition {
+                    Ok::<ContractCondition, Box<dyn Error + Send + Sync>>(ContractCondition {
                         id: condition.id().to_vec(),
                         metadata: ipfs_hash,
                         encrypted: condition.encrypted,
@@ -935,7 +955,7 @@ impl Nibble {
                     }
 
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
-                    Ok::<ContractListener, Box<dyn std::error::Error>>(ContractListener {
+                    Ok::<ContractListener, Box<dyn Error + Send + Sync>>(ContractListener {
                         id: listener.id().to_vec(),
                         metadata: ipfs_hash,
                         encrypted: listener.encrypted,
@@ -982,7 +1002,7 @@ impl Nibble {
                     Connector::OffChain(off_chain) => &off_chain.id,
                 };
 
-                Ok::<ContractConnector, Box<dyn std::error::Error>>(ContractConnector {
+                Ok::<ContractConnector, Box<dyn Error + Send + Sync>>(ContractConnector {
                     id: id.clone(),
                     metadata: ipfs_hash,
                     encrypted: encrypted.clone(),
@@ -1000,7 +1020,7 @@ impl Nibble {
                     }
 
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
-                    Ok::<ContractAgent, Box<dyn std::error::Error>>(ContractAgent {
+                    Ok::<ContractAgent, Box<dyn Error + Send + Sync>>(ContractAgent {
                         id: agent.id().to_vec(),
                         metadata: ipfs_hash,
                         encrypted: agent.encrypted,
@@ -1018,7 +1038,7 @@ impl Nibble {
                     }
 
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
-                    Ok::<ContractEvaluation, Box<dyn std::error::Error>>(ContractEvaluation {
+                    Ok::<ContractEvaluation, Box<dyn Error + Send + Sync>>(ContractEvaluation {
                         id: evaluation.id().to_vec(),
                         metadata: ipfs_hash,
                         encrypted: evaluation.encrypted,
@@ -1034,7 +1054,7 @@ impl<'a, T> AdapterHandle<'a, T>
 where
     T: Adaptable + Serialize + std::fmt::Debug,
 {
-    pub async fn persist_adapter(self) -> Result<(), Box<dyn Error>> {
+    pub async fn persist_adapter(self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let client = SignerMiddleware::new(
             self.nibble.provider.clone(),
             self.nibble
@@ -1143,7 +1163,7 @@ where
 
                     let pending_tx = cliente.send_transaction(req, None).await.map_err(|e| {
                         eprintln!("Error sending the transaction: {:?}", e);
-                        Box::<dyn std::error::Error>::from(format!(
+                        Box::<dyn Error + Send + Sync>::from(format!(
                             "Error sending the transaction: {}",
                             e
                         ))
@@ -1261,7 +1281,7 @@ where
         Ok(())
     }
 
-    pub async fn remove_adapter(self) -> Result<(), Box<dyn Error>> {
+    pub async fn remove_adapter(self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let client = SignerMiddleware::new(
             self.nibble.provider.clone(),
             self.nibble
@@ -1369,7 +1389,7 @@ where
 
                     let pending_tx = cliente.send_transaction(req, None).await.map_err(|e| {
                         eprintln!("Error sending the transaction: {:?}", e);
-                        Box::<dyn std::error::Error>::from(format!(
+                        Box::<dyn Error + Send + Sync>::from(format!(
                             "Error sending the transaction: {}",
                             e
                         ))

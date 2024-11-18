@@ -1,7 +1,7 @@
 pub mod nibble;
-pub mod utils;
-mod ipfs;
-mod adapters;
+pub mod workflow;
+pub mod ipfs;
+pub mod adapters;
+mod utils;
 mod constants;
-mod lit;
-mod workflow;
+mod encrypt;

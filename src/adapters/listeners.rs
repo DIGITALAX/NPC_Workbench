@@ -1,10 +1,11 @@
 use crate::{
     nibble::{Adaptable, Nibble},
     utils::generate_unique_id,
+    workflow::Workflow,
 };
 use ethers::{abi::Address, types::H160};
 use serde_json::{Map, Value};
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 use tokio::time::Duration;
 
 use super::conditions::ConditionCheck;
@@ -43,8 +44,8 @@ pub fn configure_new_listener(
     condition_fn: fn(Value) -> bool,
     expected_value: Option<Value>,
     encrypted: bool,
-    address: &H160
-) -> Result<(), Box<dyn Error>> {
+    address: &H160,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let condition = ConditionCheck {
         condition_fn,
         expected_value,
@@ -138,5 +139,77 @@ impl Listener {
         map.insert("condition".to_string(), Value::Object(condition_map));
 
         map
+    }
+
+    pub async fn listen_and_trigger(
+        &self,
+        workflow: Arc<Workflow>,
+        to_node_id: Vec<u8>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        match &self.listener_type {
+            ListenerType::OnChain {
+                contract_address,
+                event_signature,
+            } => {
+                println!(
+                    "Listening to OnChain events at {:?} with signature {:?}",
+                    contract_address, event_signature
+                );
+
+                loop {
+                    let event_triggered = (self.condition.condition_fn)(Value::Null);
+                    if event_triggered {
+                        println!("Event triggered! Executing workflow...");
+                        workflow.execute_node(to_node_id.clone()).await?;
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+            }
+            ListenerType::OffChain { webhook_url } => {
+                println!("Listening for webhook at {:?}", webhook_url);
+                loop {
+                    let event_triggered = (self.condition.condition_fn)(Value::Null);
+                    if event_triggered {
+                        println!("Webhook triggered! Executing workflow...");
+                        workflow.execute_node(to_node_id.clone()).await?;
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+            ListenerType::Timer {
+                interval,
+                check_onchain,
+                check_offchain,
+            } => {
+                println!(
+                    "Timer listener triggered every {:?} seconds",
+                    interval.as_secs()
+                );
+
+                loop {
+                    tokio::time::sleep(*interval).await;
+                    let event_triggered = match (check_onchain, check_offchain) {
+                        (Some(onchain_address), _) => {
+                            println!("Checking onchain at {:?}", onchain_address);
+                            (self.condition.condition_fn)(Value::Null)
+                        }
+                        (_, Some(offchain_url)) => {
+                            println!("Checking offchain at {:?}", offchain_url);
+                            (self.condition.condition_fn)(Value::Null)
+                        }
+                        _ => true,
+                    };
+
+                    if event_triggered {
+                        println!("Timer condition met! Executing workflow...");
+                        workflow.execute_node(to_node_id.clone()).await?;
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

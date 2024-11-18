@@ -24,7 +24,7 @@ struct EncryptParams {
 pub fn encrypt_with_public_key(
     metadata: Vec<u8>,
     wallet: LocalWallet,
-) -> Result<Vec<u8>, Box<dyn Error>> {
+) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     let public_key = wallet.signer().verifying_key().to_encoded_point(false);
 
     let ephemeral_private_key = k256::Scalar::random(&mut OsRng);
@@ -56,7 +56,7 @@ pub fn encrypt_with_public_key(
 pub fn decrypt_with_private_key(
     encrypted_data: Vec<u8>,
     wallet: LocalWallet,
-) -> Result<Value, Box<dyn Error>> {
+) -> Result<Value, Box<dyn Error + Send + Sync>> {
     let private_key_bytes = wallet.signer().to_bytes();
 
     let ephemeral_public_key_bytes = &encrypted_data[..65];
