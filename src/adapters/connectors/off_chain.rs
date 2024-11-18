@@ -5,10 +5,7 @@ use ethers::types::H160;
 use reqwest::{Client, Method};
 use serde_json::{Map, Value};
 
-use crate::{
-    nibble::{Adaptable, Nibble},
-    utils::generate_unique_id,
-};
+use crate::{nibble::Adaptable, utils::generate_unique_id};
 
 #[derive(Clone)]
 pub struct OffChainConnector {
@@ -18,7 +15,8 @@ pub struct OffChainConnector {
     pub encrypted: bool,
     pub http_method: Method,
     pub headers: Option<HashMap<String, String>>,
-    pub execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>>,
+    pub execution_fn:
+        Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>>,
 }
 
 impl fmt::Debug for OffChainConnector {
@@ -42,7 +40,10 @@ impl OffChainConnector {
         self.execution_fn = Some(Arc::new(f));
     }
 
-    pub async fn execute_request(&self, payload: Option<Value>) -> Result<Value, Box<dyn Error + Send + Sync>> {
+    pub async fn execute_request(
+        &self,
+        payload: Option<Value>,
+    ) -> Result<Value, Box<dyn Error + Send + Sync>> {
         let client = Client::new();
         let mut request = client.request(self.http_method.clone(), &self.api_url);
 
@@ -133,13 +134,14 @@ impl OffChainConnector {
 }
 
 pub fn configure_new_offchain_connector(
-    nibble: &mut Nibble,
     name: &str,
     api_url: &str,
     encrypted: bool,
     http_method: Method,
     headers: Option<HashMap<String, String>>,
-    execution_fn: Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>>,
+    execution_fn: Option<
+        Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
+    >,
     address: &H160,
 ) -> Result<OffChainConnector, Box<dyn Error + Send + Sync>> {
     let off_chain = OffChainConnector {
@@ -151,7 +153,6 @@ pub fn configure_new_offchain_connector(
         headers,
         execution_fn,
     };
-    nibble.offchain_connectors.push(off_chain.clone());
     Ok(off_chain)
 }
 

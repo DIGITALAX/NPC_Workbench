@@ -1,10 +1,7 @@
 use ethers::types::H160;
 use serde_json::{Map, Value};
 
-use crate::{
-    nibble::{Adaptable, Nibble},
-    utils::generate_unique_id,
-};
+use crate::{nibble::Adaptable, utils::generate_unique_id};
 
 use std::{error::Error, sync::Arc};
 
@@ -62,7 +59,6 @@ impl std::fmt::Debug for EvaluationType {
 }
 
 pub fn configure_new_evaluation(
-    nibble: &mut Nibble,
     name: &str,
     evaluation_type: EvaluationType,
     encrypted: bool,
@@ -74,7 +70,6 @@ pub fn configure_new_evaluation(
         id: generate_unique_id(address),
         evaluation_type,
     };
-    nibble.evaluations.push(evaluation.clone());
     Ok(evaluation)
 }
 

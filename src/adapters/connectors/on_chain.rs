@@ -1,5 +1,5 @@
 use crate::{
-    nibble::{Adaptable, Nibble},
+    nibble::Adaptable,
     utils::{convert_value_to_token, generate_unique_id},
 };
 use ethers::{
@@ -46,7 +46,6 @@ impl Default for GasOptions {
 }
 
 pub fn configure_new_onchain_connector(
-    nibble: &mut Nibble,
     name: &str,
     address: Address,
     encrypted: bool,
@@ -59,7 +58,6 @@ pub fn configure_new_onchain_connector(
         encrypted,
         transactions: vec![],
     };
-    nibble.onchain_connectors.push(on_chain.clone());
     Ok(on_chain)
 }
 

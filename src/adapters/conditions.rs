@@ -67,7 +67,6 @@ impl ConditionCheck {
 }
 
 pub fn configure_new_condition(
-    nibble: &mut Nibble,
     name: &str,
     condition_type: ConditionType,
     condition_fn: fn(Value) -> bool,
@@ -88,7 +87,6 @@ pub fn configure_new_condition(
         encrypted,
     };
 
-    nibble.conditions.push(condition.clone());
 
     Ok(condition)
 }

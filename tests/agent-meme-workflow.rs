@@ -6,10 +6,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_nibble() {
-        let owner_private_key = "0x<YOUR_PRIVATE_KEY>";
+        let owner_private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279385fe482433a9d3fb9";
         let rpc_url = "https://rpc-url-for-chain";
         let ipfs_provider = IPFSProvider::Infura;
-        let ipfs_config: HashMap<_, _> = HashMap::new();
+        let mut ipfs_config: HashMap<String, String> = HashMap::new();
+        ipfs_config.insert("project_id".to_string(), "your-project-id".to_string());
+        ipfs_config.insert("project_secret".to_string(), "your-project-secret".to_string());
         let chain = Chain::PolygonAmoy;
         let graph_api_key = Some("your-graph-api-key".to_string());
 
@@ -22,11 +24,9 @@ mod tests {
             graph_api_key,
         );
 
-        assert!(new_nibble.is_ok(), "Failed to create Nibble instance");
-
-        if let Ok(mut nibble) = new_nibble {
-            println!("Nibble created successfully with ID: {:?}", nibble.id);
-
+        match new_nibble {
+            Ok(mut nibble) => {
+                println!("Nibble created successfully with ID: {:?}", nibble.id);
 
         let agents = vec![
             (
@@ -46,7 +46,8 @@ mod tests {
                 },
                 false, 
                 false, 
-                false, Some(Box::leak(Box::new(H160::from_str("0x1").unwrap())))
+                false,Some(Box::leak(Box::new(H160::from_str("0x0000000000000000000000000000000000000001").unwrap())))
+
                 , Some("farcaster1"), Some("lens1")
             ),
             (
@@ -64,7 +65,8 @@ mod tests {
                     system_prompt: Some("You are an analytical agent specializing in social media metrics and trend prediction.".to_string()),
                 },
                 false, 
-                true,       false, Some(Box::leak(Box::new(H160::from_str("0x1").unwrap())))
+                true,       false, Some(Box::leak(Box::new(H160::from_str("0x0000000000000000000000000000000000000002").unwrap())))
+
                 , Some("farcaster2"), Some("lens2")
             ),
             (
@@ -106,9 +108,41 @@ mod tests {
         }
 
         assert_eq!(nibble.agents.len(), 3, "Unexpected number of agents added");
-        }
+        
+
+
+            },
+            Err(e) => {
+                eprintln!("Error al crear objeto: {:?}", e);
+                panic!("Test failed due a critical error during Nibble creation.");
+            },        }
+
+      
+
+
+
 
 
       
     }
 }
+
+
+/*
+
+1. Network Agents
+Define distinct agents with specific personalities and roles.
+Link these agents to their social media accounts via Lens Protocol and Farcaster.
+Each agent focuses on a particular aspect of the lore aligned with their personality and specific objectives.
+These agents operate continuously on the server, posting periodically according to their timers, while also interacting and responding to other accounts on social media based on predefined rules.
+2. Token Deployment
+When certain conditions are met, a process is triggered to deploy the meme token on-chain, using characteristics predefined by the user or specified by an agent (such as name, symbol, maximum supply, monthly distribution caps, or weekly distribution goals).
+3. Infrastructure Creation for the Token
+An initial token supply is minted to establish liquidity pools on Uniswap and Balancer.
+4. Agents Receive Token Information
+Network agents are updated with details about the token, its official liquidity pools, and other relevant information. This is added to their system prompt, enabling them to:
+Post about the token.
+Begin their second task, which involves distributing the token, conducting airdrops, and carrying out related activities according to their roles and the conditions governing these actions.
+5. Expanding Agent Capabilities
+Agents can later trigger additional workflows, such as initiating airdrops or distributing tokens as commissions for developers and artists. This feature can be developed in subsequent phases. Engage in trading strategies to build out the meme coin treasury.
+*/

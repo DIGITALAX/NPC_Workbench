@@ -1,8 +1,4 @@
-use crate::{
-    nibble::{Adaptable, Nibble},
-    utils::generate_unique_id,
-    workflow::Workflow,
-};
+use crate::{nibble::Adaptable, utils::generate_unique_id, workflow::Workflow};
 use ethers::{abi::Address, types::H160};
 use serde_json::{Map, Value};
 use std::{error::Error, sync::Arc};
@@ -37,7 +33,6 @@ pub enum ListenerType {
 }
 
 pub fn configure_new_listener(
-    nibble: &mut Nibble,
     name: &str,
     event_name: &str,
     listener_type: ListenerType,
@@ -45,22 +40,22 @@ pub fn configure_new_listener(
     expected_value: Option<Value>,
     encrypted: bool,
     address: &H160,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<Listener, Box<dyn Error + Send + Sync>> {
     let condition = ConditionCheck {
         condition_fn,
         expected_value,
     };
 
-    nibble.listeners.push(Listener {
+    let listener = Listener {
         name: name.to_string(),
         id: generate_unique_id(address),
         event_name: event_name.to_string(),
         listener_type,
         condition,
         encrypted,
-    });
+    };
 
-    Ok(())
+    Ok(listener)
 }
 
 impl Adaptable for Listener {

@@ -2,10 +2,7 @@ use std::error::Error;
 
 use ethers::types::H160;
 
-use crate::{
-    nibble::{Adaptable, Nibble},
-    utils::generate_unique_id,
-};
+use crate::{nibble::Adaptable, utils::generate_unique_id};
 
 #[derive(Debug, Clone)]
 pub struct FHEGate {
@@ -16,7 +13,6 @@ pub struct FHEGate {
 }
 
 pub fn configure_new_gate(
-    nibble: &mut Nibble,
     name: &str,
     key: &str,
     encrypted: bool,
@@ -28,7 +24,6 @@ pub fn configure_new_gate(
         key: key.to_string(),
         encrypted,
     };
-    nibble.fhe_gates.push(fhe_gate.clone());
     Ok(fhe_gate)
 }
 

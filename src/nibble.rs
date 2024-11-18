@@ -271,9 +271,8 @@ impl Nibble {
         condition_fn: fn(Value) -> bool,
         expected_value: Option<Value>,
         encrypted: bool,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        configure_new_listener(
-            self,
+    ) -> Result<AdapterHandle<'_, Listener>, Box<dyn Error + Send + Sync>> {
+        let listener = configure_new_listener(
             name,
             event_name,
             listener_type,
@@ -281,7 +280,13 @@ impl Nibble {
             expected_value,
             encrypted,
             &self.owner_wallet.address(),
-        )
+        )?;
+        self.listeners.push(listener.clone());
+        Ok(AdapterHandle {
+            nibble: self,
+            adapter: listener,
+            adapter_type: Adapter::Listener,
+        })
     }
 
     pub fn add_condition(
@@ -293,7 +298,6 @@ impl Nibble {
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, Condition>, Box<dyn Error + Send + Sync>> {
         let condition: Condition = configure_new_condition(
-            self,
             name,
             condition_type,
             condition_fn,
@@ -316,7 +320,7 @@ impl Nibble {
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, FHEGate>, Box<dyn Error + Send + Sync>> {
         let fhe_gate: FHEGate =
-            configure_new_gate(self, name, key, encrypted, &self.owner_wallet.address())?;
+            configure_new_gate(name, key, encrypted, &self.owner_wallet.address())?;
         self.fhe_gates.push(fhe_gate.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -332,7 +336,6 @@ impl Nibble {
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, Evaluation>, Box<dyn Error + Send + Sync>> {
         let evaluation = configure_new_evaluation(
-            self,
             name,
             evaluation_type,
             encrypted,
@@ -354,7 +357,6 @@ impl Nibble {
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, OnChainConnector>, Box<dyn Error + Send + Sync>> {
         let on_chain = configure_new_onchain_connector(
-            self,
             name,
             address,
             encrypted,
@@ -380,7 +382,6 @@ impl Nibble {
         >,
     ) -> Result<AdapterHandle<'_, OffChainConnector>, Box<dyn Error + Send + Sync>> {
         let off_chain = configure_new_offchain_connector(
-            self,
             name,
             api_url,
             encrypted,
@@ -413,7 +414,6 @@ impl Nibble {
         farcaster_account: Option<&str>,
     ) -> Result<AdapterHandle<'_, Agent>, Box<dyn Error + Send + Sync>> {
         let agent = agents::configure_new_agent(
-            self,
             name,
             role,
             personality,

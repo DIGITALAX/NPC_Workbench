@@ -1,7 +1,4 @@
-use crate::{
-    nibble::{Adaptable, Nibble},
-    utils::generate_unique_id,
-};
+use crate::{nibble::Adaptable, utils::generate_unique_id};
 use ethers::{core::rand::thread_rng, prelude::*};
 use serde_json::{Map, Value};
 use std::{error::Error, str::FromStr};
@@ -58,7 +55,6 @@ pub struct Agent {
 }
 
 pub fn configure_new_agent(
-    nibble: &mut Nibble,
     name: &str,
     role: &str,
     personality: &str,
@@ -74,8 +70,8 @@ pub fn configure_new_agent(
 ) -> Result<Agent, Box<dyn Error + Send + Sync>> {
     let mut wallet = LocalWallet::new(&mut thread_rng());
 
-    if wallet_address.is_some() {
-        wallet = LocalWallet::from_str(&wallet_address.unwrap().to_string())?
+    if let Some(wallet_address) = wallet_address {
+        wallet = LocalWallet::from_str(&wallet_address.to_string()).unwrap_or(wallet);
     }
 
     let agent = Agent {
@@ -92,8 +88,6 @@ pub fn configure_new_agent(
         lens_account: lens_account.map(|s| s.to_string()),
         farcaster_account: farcaster_account.map(|s| s.to_string()),
     };
-
-    nibble.agents.push(agent.clone());
 
     Ok(agent)
 }
