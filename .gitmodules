@@ -1,0 +1,3 @@
+[submodule "contracts/lib/fhenix-contracts"]
+	path = contracts/lib/fhenix-contracts
+	url = https://github.com/FhenixProtocol/fhenix-contracts
