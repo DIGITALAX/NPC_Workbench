@@ -2,7 +2,7 @@
 name = "npc_workbench"
 version = "0.1.0"
 edition = "2021"
-description = "Web3 NPC Workflows from the Agentic Meme Factory."
+description = "Workflows for Agent Memes."
 license = "MIT OR Apache-2.0"
 authors = ["Emma-Jane"]
 repository = "https://github.com/digitalax/npc_workbench"

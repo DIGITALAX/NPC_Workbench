@@ -3,7 +3,7 @@ use ethers::{core::rand::thread_rng, prelude::*};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
-use std::{error::Error, iter::Iterator, str::FromStr};
+use std::{collections, error::Error, iter::Iterator, str::FromStr};
 
 #[derive(Debug, Clone)]
 pub enum LLMModel {
@@ -36,7 +36,7 @@ pub enum LLMModel {
         presence_penalty: f32,
     },
     Other {
-        config: std::collections::HashMap<String, String>,
+        config: collections::HashMap<String, String>,
     },
 }
 
@@ -289,189 +289,7 @@ impl Agent {
         &self,
         input_prompt: &str,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        match &self.model {
-            LLMModel::OpenAI {
-                api_key,
-                model,
-                temperature,
-                max_tokens,
-                top_p,
-                frequency_penalty,
-                presence_penalty,
-                system_prompt,
-            } => {
-                let prompt = if let Some(system) = system_prompt {
-                    format!("{}\n{}", system, input_prompt)
-                } else {
-                    input_prompt.to_string()
-                };
-
-                let client = reqwest::Client::new();
-                let response = client
-                    .post("https://api.openai.com/v1/completions")
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .json(&serde_json::json!({
-                        "model": model,
-                        "prompt": prompt,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "top_p": top_p,
-                        "frequency_penalty": frequency_penalty,
-                        "presence_penalty": presence_penalty
-                    }))
-                    .send()
-                    .await;
-
-                let response = match response {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        eprintln!("Error sending request to OpenAI API: {}", e);
-                        return Err(e.into());
-                    }
-                };
-
-                let response_json: Value = response.json().await?;
-                let completion = response_json["choices"][0]["text"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-                Ok(completion)
-            }
-            LLMModel::Claude {
-                api_key,
-                model,
-                temperature,
-                max_tokens,
-                top_k,
-                top_p,
-                system_prompt,
-            } => {
-                let prompt = if let Some(system) = system_prompt {
-                    format!("{}\n{}", system, input_prompt)
-                } else {
-                    input_prompt.to_string()
-                };
-
-                let client = reqwest::Client::new();
-                let response = client
-                    .post(format!("https://api.anthropic.com/v1/claude/{}", model))
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .json(&serde_json::json!({
-                        "prompt": prompt,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "top_k": top_k,
-                        "top_p": top_p
-                    }))
-                    .send()
-                    .await;
-
-                let response = match response {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        eprintln!("Error sending request to Claude API: {}", e);
-                        return Err(e.into());
-                    }
-                };
-
-                let response_json: Value = response.json().await?;
-                let completion = response_json["completion"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-                Ok(completion)
-            }
-            LLMModel::Ollama {
-                api_key,
-                model,
-                temperature,
-                max_tokens,
-                top_p,
-                frequency_penalty,
-                presence_penalty,
-            } => {
-                let client = reqwest::Client::new();
-                let response = client
-                    .post("https://api.ollama.ai/generate")
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .json(&serde_json::json!({
-                        "model": model,
-                        "prompt": input_prompt,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "top_p": top_p,
-                        "frequency_penalty": frequency_penalty,
-                        "presence_penalty": presence_penalty
-                    }))
-                    .send()
-                    .await;
-
-                let response = match response {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        eprintln!("Error sending request to Ollama API: {}", e);
-                        return Err(e.into());
-                    }
-                };
-
-                let response_json: Value = response.json().await?;
-                let completion = response_json["text"].as_str().unwrap_or("").to_string();
-                Ok(completion)
-            }
-            LLMModel::Other { config } => {
-                let url = config.get("url").ok_or("Missing 'url' in configuration.")?;
-                let default_method = String::from("POST");
-                let method = config.get("method").unwrap_or(&default_method);
-                let headers: HeaderMap = config
-                    .iter()
-                    .filter(|(key, _)| key.starts_with("header_"))
-                    .map(|(key, value)| {
-                        let header_name =
-                            HeaderName::from_bytes(key.trim_start_matches("header_").as_bytes())
-                                .map_err(|e| format!("Invalid header name: {}", e))?;
-                        let header_value = HeaderValue::from_str(value)
-                            .map_err(|e| format!("Invalid header value: {}", e))?;
-                        Ok((header_name, header_value))
-                    })
-                    .collect::<Result<HeaderMap, String>>()?;
-
-                let client = reqwest::Client::new();
-
-                let mut request = match method.as_str() {
-                    "GET" => client.get(url),
-                    "POST" => client.post(url),
-                    "PUT" => client.put(url),
-                    "DELETE" => client.delete(url),
-                    _ => return Err(format!("Unsupported HTTP method: {}", method).into()),
-                };
-
-                if !headers.is_empty() {
-                    request = request.headers(headers);
-                }
-
-                if let Some(body) = config.get("body") {
-                    request = request.json(&serde_json::from_str::<Value>(body)?);
-                }
-
-                let response: Result<reqwest::Response, reqwest::Error> = request.send().await;
-
-                let response = match response {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        eprintln!("Error sending request to custom API: {}", e);
-                        return Err(e.into());
-                    }
-                };
-
-                let response_json: Value = response.json().await?;
-                let completion = response_json["result"]
-                    .as_str()
-                    .unwrap_or("No result field found in response.")
-                    .to_string();
-
-                Ok(completion)
-            }
-        }
+        Ok(call_llm_api(&self.model, input_prompt).await?)
     }
 
     pub fn add_objective(&mut self, description: &str, priority: u8, generated: bool) {
@@ -503,5 +321,194 @@ impl Agent {
         }
 
         Ok(())
+    }
+}
+
+pub async fn call_llm_api(
+    model_type: &LLMModel,
+    input_prompt: &str,
+) -> Result<String, Box<dyn Error + Send + Sync>> {
+    match &model_type {
+        LLMModel::OpenAI {
+            api_key,
+            model,
+            temperature,
+            max_tokens,
+            top_p,
+            frequency_penalty,
+            presence_penalty,
+            system_prompt,
+        } => {
+            let prompt = if let Some(system) = system_prompt {
+                format!("{}\n{}", system, input_prompt)
+            } else {
+                input_prompt.to_string()
+            };
+
+            let client = reqwest::Client::new();
+            let response = client
+                .post("https://api.openai.com/v1/completions")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&serde_json::json!({
+                    "model": model,
+                    "prompt": prompt,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
+                    "frequency_penalty": frequency_penalty,
+                    "presence_penalty": presence_penalty
+                }))
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Error sending request to OpenAI API: {}", e);
+                    return Err(e.into());
+                }
+            };
+
+            let response_json: Value = response.json().await?;
+            let completion = response_json["choices"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            Ok(completion)
+        }
+        LLMModel::Claude {
+            api_key,
+            model,
+            temperature,
+            max_tokens,
+            top_k,
+            top_p,
+            system_prompt,
+        } => {
+            let prompt = if let Some(system) = system_prompt {
+                format!("{}\n{}", system, input_prompt)
+            } else {
+                input_prompt.to_string()
+            };
+
+            let client = reqwest::Client::new();
+            let response = client
+                .post(format!("https://api.anthropic.com/v1/claude/{}", model))
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&serde_json::json!({
+                    "prompt": prompt,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_k": top_k,
+                    "top_p": top_p
+                }))
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Error sending request to Claude API: {}", e);
+                    return Err(e.into());
+                }
+            };
+
+            let response_json: Value = response.json().await?;
+            let completion = response_json["completion"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            Ok(completion)
+        }
+        LLMModel::Ollama {
+            api_key,
+            model,
+            temperature,
+            max_tokens,
+            top_p,
+            frequency_penalty,
+            presence_penalty,
+        } => {
+            let client = reqwest::Client::new();
+            let response = client
+                .post("https://api.ollama.ai/generate")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&serde_json::json!({
+                    "model": model,
+                    "prompt": input_prompt,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
+                    "frequency_penalty": frequency_penalty,
+                    "presence_penalty": presence_penalty
+                }))
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Error sending request to Ollama API: {}", e);
+                    return Err(e.into());
+                }
+            };
+
+            let response_json: Value = response.json().await?;
+            let completion = response_json["text"].as_str().unwrap_or("").to_string();
+            Ok(completion)
+        }
+        LLMModel::Other { config } => {
+            let url = config.get("url").ok_or("Missing 'url' in configuration.")?;
+            let default_method = String::from("POST");
+            let method = config.get("method").unwrap_or(&default_method);
+            let headers: HeaderMap = config
+                .iter()
+                .filter(|(key, _)| key.starts_with("header_"))
+                .map(|(key, value)| {
+                    let header_name =
+                        HeaderName::from_bytes(key.trim_start_matches("header_").as_bytes())
+                            .map_err(|e| format!("Invalid header name: {}", e))?;
+                    let header_value = HeaderValue::from_str(value)
+                        .map_err(|e| format!("Invalid header value: {}", e))?;
+                    Ok((header_name, header_value))
+                })
+                .collect::<Result<HeaderMap, String>>()?;
+
+            let client = reqwest::Client::new();
+
+            let mut request = match method.as_str() {
+                "GET" => client.get(url),
+                "POST" => client.post(url),
+                "PUT" => client.put(url),
+                "DELETE" => client.delete(url),
+                _ => return Err(format!("Unsupported HTTP method: {}", method).into()),
+            };
+
+            if !headers.is_empty() {
+                request = request.headers(headers);
+            }
+
+            if let Some(body) = config.get("body") {
+                request = request.json(&serde_json::from_str::<Value>(body)?);
+            }
+
+            let response: Result<reqwest::Response, reqwest::Error> = request.send().await;
+
+            let response = match response {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Error sending request to custom API: {}", e);
+                    return Err(e.into());
+                }
+            };
+
+            let response_json: Value = response.json().await?;
+            let completion = response_json["result"]
+                .as_str()
+                .unwrap_or("No result field found in response.")
+                .to_string();
+
+            Ok(completion)
+        }
     }
 }

@@ -5,7 +5,6 @@ use crate::{
 use ethers::{abi::Address, types::H160};
 use serde_json::{Map, Value};
 use std::error::Error;
-
 #[derive(Debug, Clone)]
 pub struct Condition {
     pub name: String,
@@ -87,7 +86,6 @@ pub fn configure_new_condition(
         encrypted,
     };
 
-
     Ok(condition)
 }
 
@@ -161,7 +159,10 @@ impl Condition {
         map
     }
 
-    pub async fn check_condition(&self, nibble_context: &Nibble) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    pub async fn check_condition(
+        &self,
+        nibble_context: &Nibble,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         match &self.condition_type {
             ConditionType::OnChain {
                 contract_address,

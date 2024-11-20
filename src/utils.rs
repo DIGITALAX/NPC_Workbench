@@ -17,11 +17,11 @@ use crate::{
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     encrypt::decrypt_with_private_key,
     nibble::ContractInfo,
-    workflow::{LinkAdapter, NodeAdapter, WorkflowLink, WorkflowNode},
+    workflow::{ExecutionHistory, LinkAdapter, NodeAdapter, WorkflowLink, WorkflowNode},
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use ethers::{
     abi::Token,
     providers::{Http, Provider},
@@ -44,6 +44,7 @@ pub struct GraphWorkflowResponse {
     pub nodes: HashMap<Vec<u8>, WorkflowNode>,
     pub links: HashMap<Vec<u8>, WorkflowLink>,
     pub encrypted: bool,
+    pub execution_history: Vec<ExecutionHistory>,
 }
 
 pub struct GraphNibbleResponse {
@@ -142,6 +143,9 @@ pub async fn load_workflow_from_subgraph(
                     .ok_or("Missing encrypted")?,
                 nodes: build_nodes(object.get("nodes").unwrap())?,
                 links: build_links(object.get("links").unwrap())?,
+                execution_history: build_execution_history(
+                    object.get("execution_history").unwrap(),
+                )?,
             });
         } else {
             return Err("No data returned from Graph query".into());
@@ -818,24 +822,33 @@ async fn build_evaluations(
                 .ok_or("Missing evaluation_type")?
             {
                 "HumanJudge" => EvaluationType::HumanJudge {
-                    prompt: metadata
-                        .get("prompt")
+                    timeout: metadata
+                        .get("timeout")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    approval_required: metadata
-                        .get("approval_required")
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .map(|secs| Duration::from_secs(secs))
+                        .unwrap_or_else(|| Duration::from_secs(0)),
+                    default: metadata
+                        .get("default")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
-                },
-                "LLMJudge" => EvaluationType::LLMJudge {
-                    model_name: metadata
-                        .get("model_name")
+                    endpoint: metadata
+                        .get("endpoint")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    prompt_template: metadata
-                        .get("prompt_template")
+                    auth_key: Some(
+                        metadata
+                            .get("auth_key")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                },
+                "LLMJudge" => EvaluationType::LLMJudge {
+                    model_type: parse_llm_model(&metadata)?,
+                    prompt: metadata
+                        .get("prompt")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
@@ -844,8 +857,21 @@ async fn build_evaluations(
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0),
                 },
-                "ContextualJudge" => EvaluationType::ContextualJudge {
-                    context_fn: Arc::new(|_value: Value| true),
+                "AgentJudge" => EvaluationType::AgentJudge {
+                    prompt: metadata
+                        .get("prompt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    agent_id: metadata
+                        .get("agent_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.as_bytes().to_vec())
+                        .unwrap_or_else(|| vec![0]),
+                    approval_threshold: metadata
+                        .get("approval_threshold")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0),
                 },
                 _ => return Err("Invalid evaluation_type".into()),
             };
@@ -1153,8 +1179,8 @@ fn build_nodes(
                 .and_then(|v| v.as_u64())
                 .and_then(|val| u32::try_from(val).ok());
 
-            let context = node_data
-                .get("repetitions")
+            let context: Option<Value> = node_data
+                .get("context")
                 .and_then(|val| Value::try_from(val.clone()).ok());
 
             nodes.insert(
@@ -1171,6 +1197,45 @@ fn build_nodes(
     }
 
     Ok(nodes)
+}
+
+fn build_execution_history(
+    data: &Value,
+) -> Result<Vec<ExecutionHistory>, Box<dyn Error + Send + Sync>> {
+    let mut execution_history = Vec::new();
+
+    if let Some(history_array) = data.as_array() {
+        for item in history_array {
+            let element_id = item
+                .get("element_id")
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .unwrap_or_default();
+
+            let element_type = item
+                .get("element_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown")
+                .to_string();
+
+            let result = item.get("result").cloned();
+
+            let timestamp = item
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .and_then(|ts| DateTime::<Utc>::from_str(ts).ok())
+                .unwrap_or_else(Utc::now);
+
+            execution_history.push(ExecutionHistory {
+                element_id,
+                element_type,
+                result,
+                timestamp,
+            });
+        }
+    }
+
+    Ok(execution_history)
 }
 
 fn build_links(
@@ -1209,6 +1274,9 @@ fn build_links(
                 .and_then(|v| v.as_u64())
                 .and_then(|val| u32::try_from(val).ok());
 
+            let context = link_data
+                .get("context")
+                .and_then(|val| Value::try_from(val.clone()).ok());
             links.insert(
                 id.clone(),
                 WorkflowLink {
@@ -1216,6 +1284,7 @@ fn build_links(
                     adapter_id,
                     adapter_type,
                     repetitions,
+                    context,
                 },
             );
         }

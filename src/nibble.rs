@@ -56,6 +56,20 @@ pub enum Adapter {
     Evaluation,
 }
 
+impl ToString for Adapter {
+    fn to_string(&self) -> String {
+        match self {
+            Adapter::Condition => "Condition".to_string(),
+            Adapter::OffChainConnector => "OffChainConnector".to_string(),
+            Adapter::OnChainConnector => "OnChainConnector".to_string(),
+            Adapter::Listener => "Listener".to_string(),
+            Adapter::FHEGate => "FHEGate".to_string(),
+            Adapter::Agent => "Agent".to_string(),
+            Adapter::Evaluation => "Evaluation".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ContractInfo {
     pub name: String,
@@ -865,6 +879,7 @@ impl Nibble {
             links: HashMap::new(),
             nibble_context: Arc::new(self.clone()),
             encrypted,
+            execution_history: Vec::new(),
         }
     }
 
@@ -890,6 +905,7 @@ impl Nibble {
             links: workflow.links,
             nibble_context: Arc::new(self.clone()),
             encrypted: workflow.encrypted,
+            execution_history: workflow.execution_history
         })
     }
 
