@@ -23,6 +23,7 @@ pub struct OnChainConnector {
 pub struct OnChainTransaction {
     pub function_signature: String,
     pub params: Vec<Value>,
+    pub chain: Chain,
     pub gas_options: GasOptions,
 }
 
@@ -67,11 +68,13 @@ impl OnChainConnector {
         function_signature: &str,
         params: Vec<Value>,
         gas_options: GasOptions,
+        chain: Chain,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.transactions.push(OnChainTransaction {
             function_signature: function_signature.to_string(),
             params,
             gas_options,
+            chain,
         });
         Ok(())
     }
@@ -183,8 +186,15 @@ impl OnChainConnector {
 
     pub async fn execute_onchain_connector(
         &self,
-        client: Arc<SignerMiddleware<Provider<Http>, LocalWallet>>,
+        provider: Provider<Http>,
+        wallet: LocalWallet,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let client = SignerMiddleware::new(
+            provider.clone(),
+            wallet.clone(),
+        );
+        let client = Arc::new(client);
+
         for tx in &self.transactions {
             let encoded_data = self.encode_function_call(&tx.function_signature, &tx.params)?;
 

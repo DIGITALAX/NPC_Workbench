@@ -1,44 +1,48 @@
 use crate::{
     adapters::{
-        agents::{Agent, LLMModel},
-        conditions::{Condition, ConditionCheck, ConditionType, TimeComparisonType},
-        connectors::{
-            off_chain::OffChainConnector,
-            on_chain::{GasOptions, OnChainConnector, OnChainTransaction},
+        links::{
+            conditions::{Condition, ConditionCheck, ConditionType, TimeComparisonType},
+            evaluations::{Evaluation, EvaluationType},
+            fhe_gates::FHEGate,
         },
-        evaluations::{Evaluation, EvaluationType},
-        fhe_gates::FHEGate,
-        listeners::{Listener, ListenerType},
+        nodes::{
+            agents::{Agent, LLMModel, Objective},
+            connectors::{
+                off_chain::OffChainConnector,
+                on_chain::{GasOptions, OnChainConnector, OnChainTransaction},
+            },
+            listeners::{Listener, ListenerType, OffChainCheck, OnChainCheck},
+        },
     },
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     encrypt::decrypt_with_private_key,
-    ipfs::{IPFSClient, IPFSClientFactory, IPFSProvider},
     nibble::ContractInfo,
     workflow::{LinkAdapter, NodeAdapter, WorkflowLink, WorkflowNode},
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::Utc;
-use dotenv::dotenv;
 use ethers::{
     abi::Token,
+    providers::{Http, Provider},
     signers::LocalWallet,
-    types::{Address, H160, U256},
+    types::{Address, Chain, H160, U256},
     utils::hex,
 };
 use rand::Rng;
 use reqwest::{Client, Method};
 use serde_json::{from_value, json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, env, error::Error, iter::Iterator, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap, convert::TryFrom, error::Error, iter::Iterator, str::FromStr, sync::Arc,
+};
 use tokio::time::Duration;
 
 pub struct GraphWorkflowResponse {
     pub id: Vec<u8>,
     pub name: String,
-    pub nodes: Vec<WorkflowNode>,
-    pub links: Vec<WorkflowLink>,
-    pub dependent_workflows: Vec<Vec<u8>>,
+    pub nodes: HashMap<Vec<u8>, WorkflowNode>,
+    pub links: HashMap<Vec<u8>, WorkflowLink>,
     pub encrypted: bool,
 }
 
@@ -60,47 +64,6 @@ pub fn convert_value_to_token(value: &Value) -> Result<Token, Box<dyn Error + Se
         Value::String(s) => Ok(Token::String(s.clone())),
         _ => Err("Unsupported parameter type".into()),
     }
-}
-
-pub fn load_ipfs_client() -> Result<Arc<dyn IPFSClient + Send + Sync>, Box<dyn Error + Send + Sync>>
-{
-    dotenv().ok();
-    let provider = match env::var("IPFS_PROVIDER")?.as_str() {
-        "Infura" => IPFSProvider::Infura,
-        "Pinata" => IPFSProvider::Pinata,
-        "Custom" => IPFSProvider::Custom,
-        _ => return Err("Unsupported IPFS provider".into()),
-    };
-
-    let mut config = HashMap::new();
-    match provider {
-        IPFSProvider::Infura => {
-            config.insert("project_id".to_string(), env::var("INFURA_PROJECT_ID")?);
-            config.insert(
-                "project_secret".to_string(),
-                env::var("INFURA_PROJECT_SECRET")?,
-            );
-        }
-        IPFSProvider::Pinata => {
-            config.insert("api_key".to_string(), env::var("PINATA_API_KEY")?);
-            config.insert(
-                "secret_api_key".to_string(),
-                env::var("PINATA_SECRET_API_KEY")?,
-            );
-        }
-        IPFSProvider::Custom => {
-            config.insert("api_url".to_string(), env::var("IPFS_API_URL")?);
-
-            for (key, value) in env::vars() {
-                if key.starts_with("IPFS_CUSTOM_HEADER_") {
-                    let header_key = key.trim_start_matches("IPFS_CUSTOM_HEADER_").to_string();
-                    config.insert(header_key, value);
-                }
-            }
-        }
-    }
-
-    IPFSClientFactory::create_client(provider, config)
 }
 
 pub fn generate_unique_id(address: &H160) -> Vec<u8> {
@@ -174,31 +137,11 @@ pub async fn load_workflow_from_subgraph(
                     .ok_or("Missing name")?
                     .parse::<String>()?,
                 encrypted: object
-                    .get("encrpyted")
+                    .get("encrypted")
                     .and_then(|v| v.as_bool())
-                    .ok_or("Missing encrpyted")?,
+                    .ok_or("Missing encrypted")?,
                 nodes: build_nodes(object.get("nodes").unwrap())?,
                 links: build_links(object.get("links").unwrap())?,
-                dependent_workflows: object
-                    .get("dependent_workflows")
-                    .and_then(|v| v.as_array())
-                    .map(|array| {
-                        array
-                            .iter()
-                            .map(|item| {
-                                item.as_array()
-                                    .map(|nested| {
-                                        nested
-                                            .iter()
-                                            .filter_map(|val| val.as_u64())
-                                            .flat_map(|u| u.to_be_bytes().to_vec())
-                                            .collect::<Vec<u8>>()
-                                    })
-                                    .unwrap_or_default()
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
             });
         } else {
             return Err("No data returned from Graph query".into());
@@ -213,6 +156,7 @@ pub async fn load_nibble_from_subgraph(
     id: Vec<u8>,
     api_key: Option<String>,
     wallet: LocalWallet,
+    provider: Provider<Http>,
 ) -> Result<GraphNibbleResponse, Box<dyn Error + Send + Sync>> {
     let mut url = GRAPH_ENDPOINT_DEV.to_string();
 
@@ -260,8 +204,12 @@ pub async fn load_nibble_from_subgraph(
                 agents: build_agents(object.get("agents").unwrap(), wallet.clone()).await?,
                 conditions: build_conditions(object.get("conditions").unwrap(), wallet.clone())
                     .await?,
-                listeners: build_listeners(object.get("listeners").unwrap(), wallet.clone())
-                    .await?,
+                listeners: build_listeners(
+                    object.get("listeners").unwrap(),
+                    wallet.clone(),
+                    provider,
+                )
+                .await?,
                 fhe_gates: build_fhe_gates(object.get("fhe_gates").unwrap(), wallet.clone())
                     .await?,
                 evaluations: build_evaluations(object.get("evaluations").unwrap(), wallet.clone())
@@ -383,6 +331,14 @@ async fn build_agents(
                 .unwrap_or("")
                 .to_string();
 
+            let objectives = metadata
+                .get("objectives")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|v| Objective::try_from(v).ok())
+                .collect();
+
             agents.push(Agent {
                 name: metadata
                     .get("name")
@@ -400,6 +356,7 @@ async fn build_agents(
                 admin_role,
                 farcaster_account: Some(farcaster_account),
                 lens_account: Some(lens_account),
+                objectives,
             });
         }
     }
@@ -639,11 +596,14 @@ async fn build_conditions(
 async fn build_listeners(
     data: &Value,
     wallet: LocalWallet,
+    provider: Provider<Http>,
 ) -> Result<Vec<Listener>, Box<dyn Error + Send + Sync>> {
     let mut listeners = Vec::new();
 
     if let Some(listener_array) = data.as_array() {
         for listener_data in listener_array {
+            let provider = provider.clone();
+            let wallet = wallet.clone();
             let id = listener_data
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -689,6 +649,20 @@ async fn build_listeners(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
+                    abi: metadata
+                        .get("abi")
+                        .and_then(|v| v.as_str())
+                        .ok_or("Missing abi")?
+                        .to_string(),
+                    repetitions: metadata.get("repetitions").and_then(|v| v.as_u64()),
+
+                    chain: metadata
+                        .get("chain")
+                        .and_then(|v| v.as_str())
+                        .ok_or("Missing chain")?
+                        .parse::<Chain>()?,
+                    provider,
+                    wallet,
                 },
                 "OffChain" => ListenerType::OffChain {
                     webhook_url: metadata
@@ -696,6 +670,7 @@ async fn build_listeners(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
+                    repetitions: metadata.get("repetitions").and_then(|v| v.as_u64()),
                 },
                 "Timer" => ListenerType::Timer {
                     interval: metadata
@@ -705,20 +680,81 @@ async fn build_listeners(
                         .ok_or("Missing interval")?,
                     check_onchain: metadata
                         .get("check_onchain")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.parse::<Address>())
+                        .map(|v| {
+                            let contract_address = v
+                                .get("contract_address")
+                                .and_then(|addr| addr.as_str())
+                                .ok_or("Missing contract_address for check_onchain")?
+                                .parse::<Address>()?;
+                            let function_name = v
+                                .get("function_name")
+                                .and_then(|name| name.as_str())
+                                .ok_or("Missing function_name for check_onchain")?
+                                .to_string();
+                            let abi = v
+                                .get("abi")
+                                .and_then(|abi| abi.as_str())
+                                .ok_or("Missing abi for check_onchain")?
+                                .to_string();
+                            let args = v.get("args").cloned();
+                            let expected_return_type = v
+                                .get("expected_return_type")
+                                .and_then(|t| t.as_str())
+                                .ok_or("Missing expected_return_type for check_onchain")?
+                                .to_string();
+
+                            let chain = v
+                                .get("chain")
+                                .and_then(|c| c.as_str())
+                                .ok_or("Missing chain for check_onchain")?
+                                .parse::<Chain>()?;
+
+                            Ok::<OnChainCheck, Box<dyn Error + Send + Sync>>(OnChainCheck {
+                                contract_address,
+                                function_name,
+                                abi,
+                                args,
+                                expected_return_type,
+                                provider,
+                                chain,
+                                wallet,
+                            })
+                        })
                         .transpose()?,
                     check_offchain: metadata
                         .get("check_offchain")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
+                        .map(|v| {
+                            let api_endpoint = v
+                                .get("api_endpoint")
+                                .and_then(|api| api.as_str())
+                                .ok_or("Missing api_endpoint for check_offchain")?
+                                .to_string();
+                            let params = v.get("params").and_then(|p| p.as_object()).map(|obj| {
+                                obj.iter()
+                                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                                    .collect()
+                            });
+                            let headers = v.get("headers").and_then(|h| h.as_object()).map(|obj| {
+                                obj.iter()
+                                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                                    .collect()
+                            });
+                            let expected_return_type = v
+                                .get("expected_return_type")
+                                .and_then(|t| t.as_str())
+                                .ok_or("Missing expected_return_type for check_offchain")?
+                                .to_string();
+                            Ok::<OffChainCheck, Box<dyn Error + Send + Sync>>(OffChainCheck {
+                                api_endpoint,
+                                params,
+                                headers,
+                                expected_return_type,
+                            })
+                        })
+                        .transpose()?,
+                    repetitions: metadata.get("repetitions").and_then(|v| v.as_u64()),
                 },
                 _ => return Err("Invalid listener_type".into()),
-            };
-
-            let condition = ConditionCheck {
-                condition_fn: |_v| true,
-                expected_value: metadata.get("expected_value").cloned(),
             };
 
             listeners.push(Listener {
@@ -730,7 +766,7 @@ async fn build_listeners(
                     .unwrap_or("Unnamed Event")
                     .to_string(),
                 listener_type,
-                condition,
+
                 encrypted,
             });
         }
@@ -947,6 +983,11 @@ async fn build_onchain_connectors(
                                     .and_then(|v| v.as_array())
                                     .cloned()
                                     .unwrap_or_else(Vec::new),
+                                chain: tx
+                                    .get("chain")
+                                    .and_then(|s| s.as_str())
+                                    .and_then(|s| s.parse::<Chain>().ok())
+                                    .unwrap_or(Chain::Mainnet),
                                 gas_options: GasOptions {
                                     max_fee_per_gas: tx
                                         .get("max_fee_per_gas")
@@ -1076,8 +1117,10 @@ pub async fn build_offchain_connectors(
     Ok(offchain_connectors)
 }
 
-fn build_nodes(data: &Value) -> Result<Vec<WorkflowNode>, Box<dyn Error + Send + Sync>> {
-    let mut nodes = Vec::new();
+fn build_nodes(
+    data: &Value,
+) -> Result<HashMap<Vec<u8>, WorkflowNode>, Box<dyn Error + Send + Sync>> {
+    let mut nodes = HashMap::new();
 
     if let Some(node_array) = data.as_array() {
         for node_data in node_array {
@@ -1095,6 +1138,7 @@ fn build_nodes(data: &Value) -> Result<Vec<WorkflowNode>, Box<dyn Error + Send +
                 "OffChainConnector" => NodeAdapter::OffChainConnector,
                 "OnChainConnector" => NodeAdapter::OnChainConnector,
                 "Agent" => NodeAdapter::Agent,
+                "Listener" => NodeAdapter::Listener,
                 _ => return Err("Invalid adapter_type".into()),
             };
 
@@ -1104,34 +1148,38 @@ fn build_nodes(data: &Value) -> Result<Vec<WorkflowNode>, Box<dyn Error + Send +
                 .map(|s| hex::decode(s).unwrap_or_default())
                 .unwrap_or_default();
 
-            nodes.push(WorkflowNode {
-                id,
-                adapter_type,
-                adapter_id,
-            });
+            let repetitions = node_data
+                .get("repetitions")
+                .and_then(|v| v.as_u64())
+                .and_then(|val| u32::try_from(val).ok());
+
+            let context = node_data
+                .get("repetitions")
+                .and_then(|val| Value::try_from(val.clone()).ok());
+
+            nodes.insert(
+                id.clone(),
+                WorkflowNode {
+                    id,
+                    adapter_type,
+                    adapter_id,
+                    repetitions,
+                    context,
+                },
+            );
         }
     }
 
     Ok(nodes)
 }
 
-fn build_links(data: &Value) -> Result<Vec<WorkflowLink>, Box<dyn Error + Send + Sync>> {
-    let mut links = Vec::new();
+fn build_links(
+    data: &Value,
+) -> Result<HashMap<Vec<u8>, WorkflowLink>, Box<dyn Error + Send + Sync>> {
+    let mut links = HashMap::new();
 
     if let Some(link_array) = data.as_array() {
         for link_data in link_array {
-            let from_node: Vec<u8> = link_data
-                .get("from_node")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
-            let to_node = link_data
-                .get("to_node")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let id = link_data
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -1152,18 +1200,24 @@ fn build_links(data: &Value) -> Result<Vec<WorkflowLink>, Box<dyn Error + Send +
                 "Evaluation" => LinkAdapter::Evaluation,
                 "Condition" => LinkAdapter::Condition,
                 "FHEGate" => LinkAdapter::FHEGate,
-                "Listener" => LinkAdapter::Listener,
 
                 _ => return Err("Invalid adapter_type".into()),
             };
 
-            links.push(WorkflowLink {
-                id,
-                adapter_id,
-                adapter_type,
-                from_node,
-                to_node,
-            });
+            let repetitions = link_data
+                .get("repetitions")
+                .and_then(|v| v.as_u64())
+                .and_then(|val| u32::try_from(val).ok());
+
+            links.insert(
+                id.clone(),
+                WorkflowLink {
+                    id,
+                    adapter_id,
+                    adapter_type,
+                    repetitions,
+                },
+            );
         }
     }
 

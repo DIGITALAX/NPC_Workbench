@@ -1,5 +1,5 @@
 use crate::{
-    ipfs::IPFSClient, encrypt::encrypt_with_public_key, nibble::Nibble, utils::generate_unique_id,
+    encrypt::encrypt_with_public_key, ipfs::IPFSClient, nibble::Nibble, utils::generate_unique_id,
 };
 use ethers::{
     abi::{Abi, Token, Tokenize},
@@ -9,21 +9,33 @@ use ethers::{
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
-
-use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc};
+use std::{
+    collections::HashMap, error::Error, fmt::Debug, fs::File, io::Read, marker::Send, path::Path,
+    result::Result, sync::Arc,
+};
+use tokio::sync::{
+    mpsc::{self},
+    oneshot,
+};
 
 #[derive(Debug, Clone)]
 pub enum NodeAdapter {
     OffChainConnector,
     OnChainConnector,
     Agent,
+    Listener,
+    SubFlow {
+        subflow: Box<Workflow>,
+        blocking: bool,
+        repetitions: Option<u32>,
+        count_successes: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum LinkAdapter {
     Condition,
     FHEGate,
-    Listener,
     Evaluation,
 }
 
@@ -31,18 +43,19 @@ pub enum LinkAdapter {
 pub struct Workflow {
     pub id: Vec<u8>,
     pub name: String,
-    pub nodes: Vec<WorkflowNode>,
-    pub links: Vec<WorkflowLink>,
+    pub nodes: HashMap<Vec<u8>, WorkflowNode>,
+    pub links: HashMap<Vec<u8>, WorkflowLink>,
     pub nibble_context: Arc<Nibble>,
-    pub dependent_workflows: Vec<Vec<u8>>,
     pub encrypted: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct WorkflowNode {
     pub id: Vec<u8>,
-    pub adapter_type: NodeAdapter,
     pub adapter_id: Vec<u8>,
+    pub adapter_type: NodeAdapter,
+    pub context: Option<Value>,
+    pub repetitions: Option<u32>,
 }
 
 impl WorkflowNode {
@@ -64,10 +77,9 @@ impl WorkflowNode {
 #[derive(Debug, Clone)]
 pub struct WorkflowLink {
     pub id: Vec<u8>,
-    pub from_node: Vec<u8>,
-    pub to_node: Vec<u8>,
     pub adapter_id: Vec<u8>,
     pub adapter_type: LinkAdapter,
+    pub repetitions: Option<u32>,
 }
 
 impl WorkflowLink {
@@ -75,16 +87,8 @@ impl WorkflowLink {
         let mut map = Map::new();
         map.insert("id".to_string(), Value::String(hex::encode(&self.id)));
         map.insert(
-            "from_node".to_string(),
-            Value::String(hex::encode(&self.from_node)),
-        );
-        map.insert(
-            "to_node".to_string(),
-            Value::String(hex::encode(&self.to_node)),
-        );
-        map.insert(
             "adapter_id".to_string(),
-            Value::String(hex::encode(&self.to_node)),
+            Value::String(hex::encode(&self.adapter_id)),
         );
         map.insert(
             "adapter_type".to_string(),
@@ -112,100 +116,44 @@ impl Tokenize for ModifyWorkflow {
 }
 
 impl Workflow {
-    pub fn add_node(&mut self, adapter_id: Vec<u8>) -> Result<(), String> {
-        let adapter_type = if self
-            .nibble_context
-            .agents
-            .iter()
-            .chain(self.nibble_context.saved_agents.iter())
-            .find(|a| a.id == adapter_id)
-            .is_some()
-        {
-            NodeAdapter::Agent
-        } else if self
-            .nibble_context
-            .offchain_connectors
-            .iter()
-            .chain(self.nibble_context.saved_offchain_connectors.iter())
-            .find(|c| c.id == adapter_id)
-            .is_some()
-        {
-            NodeAdapter::OffChainConnector
-        } else if self
-            .nibble_context
-            .onchain_connectors
-            .iter()
-            .chain(self.nibble_context.saved_onchain_connectors.iter())
-            .find(|c| c.id == adapter_id)
-            .is_some()
-        {
-            NodeAdapter::OnChainConnector
-        } else {
-            return Err("Adapter with the given ID not found".into());
-        };
-
-        self.nodes.push(WorkflowNode {
-            id: generate_unique_id(&self.nibble_context.owner_wallet.address()),
-            adapter_id,
-            adapter_type,
-        });
-        Ok(())
+    pub fn add_node(
+        &mut self,
+        adapter_id: Vec<u8>,
+        adapter_type: NodeAdapter,
+        repetitions: Option<u32>,
+        context: Option<Value>,
+    ) -> &mut Self {
+        let id = generate_unique_id(&self.nibble_context.owner_wallet.address());
+        self.nodes.insert(
+            id.clone(),
+            WorkflowNode {
+                id,
+                adapter_id,
+                adapter_type,
+                repetitions,
+                context,
+            },
+        );
+        self
     }
 
     pub fn add_link(
         &mut self,
-        from_node: Vec<u8>,
-        to_node: Vec<u8>,
         adapter_id: Vec<u8>,
-    ) -> Result<(), String> {
-        let adapter_type = if self
-            .nibble_context
-            .conditions
-            .iter()
-            .chain(self.nibble_context.saved_conditions.iter())
-            .find(|l| l.id == adapter_id)
-            .is_some()
-        {
-            LinkAdapter::Condition
-        } else if self
-            .nibble_context
-            .listeners
-            .iter()
-            .chain(self.nibble_context.saved_listeners.iter())
-            .find(|l| l.id == adapter_id)
-            .is_some()
-        {
-            LinkAdapter::Listener
-        } else if self
-            .nibble_context
-            .evaluations
-            .iter()
-            .chain(self.nibble_context.saved_evaluations.iter())
-            .find(|a| a.id == adapter_id)
-            .is_some()
-        {
-            LinkAdapter::Evaluation
-        } else if self
-            .nibble_context
-            .fhe_gates
-            .iter()
-            .chain(self.nibble_context.saved_fhe_gates.iter())
-            .find(|c| c.id == adapter_id)
-            .is_some()
-        {
-            LinkAdapter::FHEGate
-        } else {
-            return Err("Adapter with the given ID not found".into());
-        };
-
-        self.links.push(WorkflowLink {
-            id: generate_unique_id(&self.nibble_context.owner_wallet.address()),
-            from_node,
-            to_node,
-            adapter_id,
-            adapter_type,
-        });
-        Ok(())
+        adapter_type: LinkAdapter,
+        repetitions: Option<u32>,
+    ) -> &mut Self {
+        let id = generate_unique_id(&self.nibble_context.owner_wallet.address());
+        self.links.insert(
+            id.clone(),
+            WorkflowLink {
+                id,
+                adapter_id,
+                adapter_type,
+                repetitions,
+            },
+        );
+        self
     }
 
     pub async fn remove(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -384,191 +332,271 @@ impl Workflow {
         Ok(())
     }
 
-    async fn execute(&self, context: &mut ExecutionContext) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let execution_order = self.topological_sort()?;
+    pub async fn execute(
+        &self,
+        repetitions: Option<u32>,
+        count_successes: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut successful_repeats = 0;
+        let mut total_repeats = 0;
 
-        for node_id in execution_order {
-            let node = self
-                .nodes
-                .iter()
-                .find(|n| n.id == node_id)
-                .ok_or("Node not found in execution order")?;
+        while repetitions.map_or(true, |r| {
+            if count_successes {
+                successful_repeats < r
+            } else {
+                total_repeats < r
+            }
+        }) {
+            println!("Executing workflow repetition: {}", total_repeats + 1);
+            let mut context_data = None;
+            let mut current_success = true;
+            let subflow_manager = SubflowManager::new();
 
-            for link in self.links.iter().filter(|link| link.to_node == node_id) {
-                match link.adapter_type {
-                    LinkAdapter::Listener => {
-                        let listener = self
-                            .nibble_context
-                            .listeners
-                            .iter()
-                            .find(|l| l.id == link.adapter_id)
-                            .ok_or("Listener not found")?
-                            .clone();
+            for element_id in self.topological_sort()? {
+                if let Some(node) = self.nodes.get(&element_id) {
+                    context_data = match node.adapter_type.clone() {
+                        NodeAdapter::Agent => {
+                            let agent_found = self
+                                .nibble_context
+                                .agents
+                                .iter()
+                                .find(|agent| agent.id == *node.adapter_id);
+                            if let Some(agent) = agent_found {
+                                println!("Executing Agent: {:?}", node.id);
 
-                        let workflow = Arc::new(self.clone());
-                        let to_node = link.to_node.clone();
+                                let input_context = node
+                                    .context
+                                    .as_ref()
+                                    .map_or("", |v| v.as_str().unwrap_or(""));
 
-                        tokio::spawn(async move {
-                            if let Err(e) = listener.listen_and_trigger(workflow, to_node).await {
-                                eprintln!("Error in listener: {}", e);
+                                match agent.execute_agent(input_context).await {
+                                    Ok(result) => {
+                                        println!("Agent Result: {}", result);
+                                        Some(Value::String(result))
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Agent execution failed: {:?}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                eprintln!("Agent not found for ID: {:?}", node.adapter_id);
+                                None
                             }
-                        });
-                    }
-                    LinkAdapter::Condition => {
-                        let condition = self
-                            .nibble_context
-                            .conditions
-                            .iter()
-                            .chain(self.nibble_context.saved_conditions.iter())
-                            .find(|c| c.id == link.adapter_id)
-                            .ok_or("Condition not found")?;
-
-                        let is_valid = condition.check_condition(&self.nibble_context).await?;
-
-                        if !is_valid {
-                            return Err(format!(
-                            "Node {:?} execution failed due to failed condition on link from {:?} to {:?}",
-                            node.adapter_id,
-                            link.from_node,
-                            link.to_node
-                        )
-                        .into());
                         }
-                    }
-                    LinkAdapter::Evaluation => {
-                        let evaluation = self
-                            .nibble_context
-                            .evaluations
-                            .iter()
-                            .chain(self.nibble_context.saved_evaluations.iter())
-                            .find(|c| c.id == link.adapter_id)
-                            .ok_or("Evaluation not found")?;
+                        NodeAdapter::Listener => {
+                            println!("Waiting on Listener: {:?}", node.id);
 
-                        let is_valid = evaluation.check_evaluation().await?;
+                            let listener_found = self
+                                .nibble_context
+                                .listeners
+                                .iter()
+                                .find(|listener| listener.id == *node.adapter_id);
 
-                        if !is_valid {
-                            return Err(format!(
-                        "Node {:?} execution failed due to failed evaluation on link from {:?} to {:?}",
-                        node.adapter_id,
-                        link.from_node,
-                        link.to_node
-                    )
-                    .into());
+                            if let Some(listener) = listener_found {
+                                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+                                let listener_task = tokio::spawn({
+                                    let listener = listener.clone();
+                                    async move {
+                                        if let Err(e) = listener.listen_and_trigger(tx).await {
+                                            eprintln!("Error in listener: {:?}", e);
+                                        }
+                                    }
+                                });
+
+                                let result = match rx.recv().await {
+                                    Some(event_data) => {
+                                        println!("Listener triggered with data: {:?}", event_data);
+                                        Some(event_data)
+                                    }
+                                    None => {
+                                        eprintln!("Listener did not produce any result.");
+                                        current_success = false;
+                                        None
+                                    }
+                                };
+
+                                if let Err(e) = listener_task.await {
+                                    eprintln!("Listener task failed: {:?}", e);
+                                }
+
+                                result
+                            } else {
+                                eprintln!("Listener not found for ID: {:?}", node.adapter_id);
+                                current_success = false;
+                                None
+                            }
                         }
-                    }
-                    LinkAdapter::FHEGate => {
-                        let fhe_gate = self
-                            .nibble_context
-                            .fhe_gates
-                            .iter()
-                            .chain(self.nibble_context.saved_fhe_gates.iter())
-                            .find(|c| c.id == link.adapter_id)
-                            .ok_or("FHE gate not found")?;
+                        NodeAdapter::OnChainConnector => {
+                            let connector_found = self
+                                .nibble_context
+                                .onchain_connectors
+                                .iter()
+                                .find(|connector| connector.id == *node.adapter_id);
 
-                        let is_valid = fhe_gate.check_fhe_gate().await?;
+                            if let Some(onchain_connector) = connector_found {
+                                println!("Executing OnChainConnector: {:?}", node.id);
 
-                        if !is_valid {
-                            return Err(format!(
-                    "Node {:?} FHE gate failed due to failed evaluation on link from {:?} to {:?}",
-                    node.adapter_id,
-                    link.from_node,
-                    link.to_node
-                )
-                            .into());
+                                match onchain_connector
+                                    .execute_onchain_connector(
+                                        self.nibble_context.provider.clone(),
+                                        self.nibble_context.owner_wallet.clone(),
+                                    )
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        println!(
+                                            "OnChainConnector executed successfully: {:?}",
+                                            node.id
+                                        );
+                                        Some(Value::String("OnChainConnector Success".to_string()))
+                                    }
+                                    Err(e) => {
+                                        eprintln!("OnChainConnector execution failed: {:?}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                                    "OnChainConnector not found for ID: {:?}",
+                                    node.adapter_id
+                                );
+                                None
+                            }
                         }
+
+                        NodeAdapter::OffChainConnector => {
+                            let connector_found = self
+                                .nibble_context
+                                .offchain_connectors
+                                .iter()
+                                .find(|connector| connector.id == *node.adapter_id);
+
+                            if let Some(offchain_connector) = connector_found {
+                                println!("Executing OffChainConnector: {:?}", node.id);
+
+                                match offchain_connector
+                                    .execute_request(context_data.clone())
+                                    .await
+                                {
+                                    Ok(response) => {
+                                        println!("OffChainConnector response: {:?}", response);
+                                        Some(response)
+                                    }
+                                    Err(e) => {
+                                        eprintln!("OffChainConnector execution failed: {:?}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                                    "OffChainConnector not found for ID: {:?}",
+                                    node.adapter_id
+                                );
+                                None
+                            }
+                        }
+
+                        NodeAdapter::SubFlow {
+                            subflow,
+                            blocking,
+                            repetitions,
+                            count_successes,
+                        } => {
+                            println!("Executing SubFlow: {:?}", subflow.id);
+
+                            if blocking {
+                                let result = subflow_manager
+                                    .execute_subflow(
+                                        subflow.clone().into(),
+                                        repetitions,
+                                        count_successes,
+                                        true,
+                                    )
+                                    .await;
+
+                                match result {
+                                    Some(Ok(_)) => {
+                                        Some(Value::String("Blocking SubFlow Success".to_string()))
+                                    }
+                                    Some(Err(e)) => {
+                                        eprintln!("Blocking SubFlow failed: {:?}", e);
+                                        None
+                                    }
+                                    None => None,
+                                }
+                            } else {
+                                subflow_manager
+                                    .execute_subflow(
+                                        subflow.clone().into(),
+                                        repetitions,
+                                        count_successes,
+                                        false,
+                                    )
+                                    .await;
+                                Some(Value::String("Non-blocking SubFlow Started".to_string()))
+                            }
+                        }
+                    };
+
+                    if context_data.is_none() {
+                        println!("Execution stopped for repetition: {}", total_repeats + 1);
+                        current_success = false;
+                        break;
+                    }
+                } else if let Some(link) = self.links.get(&element_id) {
+                    context_data = match link.adapter_type {
+                        LinkAdapter::Condition => {
+                            println!("Processing Condition: {:?}", link.id);
+                            if true {
+                                context_data
+                            } else {
+                                println!("Condition failed. Skipping this repetition.");
+                                current_success = false;
+                                break;
+                            }
+                        }
+                        LinkAdapter::FHEGate => {
+                            println!("Processing FHEGate: {:?}", link.id);
+                            if true {
+                                context_data
+                            } else {
+                                println!("FHEGate failed. Skipping this repetition.");
+                                current_success = false;
+                                break;
+                            }
+                        }
+                        LinkAdapter::Evaluation => {
+                            println!("Processing Evaluation: {:?}", link.id);
+                            if true {
+                                context_data
+                            } else {
+                                println!("Evaluation failed. Skipping this repetition.");
+                                current_success = false;
+                                break;
+                            }
+                        }
+                    };
+
+                    if context_data.is_none() {
+                        println!("Execution stopped for repetition: {}", total_repeats + 1);
+                        break;
                     }
                 }
             }
 
-            match node.adapter_type {
-                NodeAdapter::Agent => {
-                    let agent = self
-                        .nibble_context
-                        .agents
-                        .iter()
-                        .find(|a| a.id == node.adapter_id)
-                        .ok_or("Agent not found")?;
-
-                    let input_prompt = "Your input prompt for the agent";
-                    let output = agent.execute_agent(input_prompt).await?;
-                    println!("Agent execution result: {}", output);
-                }
-                NodeAdapter::OnChainConnector => {
-                    let connector = self
-                        .nibble_context
-                        .onchain_connectors
-                        .iter()
-                        .find(|c| c.id == node.adapter_id)
-                        .ok_or("OnChainConnector not found")?;
-
-                    let client = Arc::new(SignerMiddleware::new(
-                        self.nibble_context.provider.clone(),
-                        self.nibble_context.owner_wallet.clone(),
-                    ));
-
-                    connector.execute_onchain_connector(client).await?;
-                }
-                NodeAdapter::OffChainConnector => {
-                    let connector = self
-                        .nibble_context
-                        .offchain_connectors
-                        .iter()
-                        .find(|c| c.id == node.adapter_id)
-                        .ok_or("OffChainConnector not found")?;
-
-                    let response = connector.execute_offchain_connector(None).await?;
-                    println!("OffChainConnector response: {:?}", response);
-                }
+            if current_success && count_successes {
+                successful_repeats += 1;
             }
+
+            total_repeats += 1;
         }
 
-        Ok(())
-    }
-
-    pub async fn execute_node(&self, node_id: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let node = self
-            .nodes
-            .iter()
-            .find(|n| n.id == node_id)
-            .ok_or("Node not found for execution")?;
-
-        match node.adapter_type {
-            NodeAdapter::Agent => {
-                let agent = self
-                    .nibble_context
-                    .agents
-                    .iter()
-                    .find(|a| a.id == node.adapter_id)
-                    .ok_or("Agent not found")?;
-                let input_prompt = "Your input prompt for the agent";
-                let output = agent.execute_agent(input_prompt).await?;
-                println!("Agent execution result: {}", output);
-            }
-            NodeAdapter::OnChainConnector => {
-                let connector = self
-                    .nibble_context
-                    .onchain_connectors
-                    .iter()
-                    .find(|c| c.id == node.adapter_id)
-                    .ok_or("OnChainConnector not found")?;
-                let client = Arc::new(SignerMiddleware::new(
-                    self.nibble_context.provider.clone(),
-                    self.nibble_context.owner_wallet.clone(),
-                ));
-                connector.execute_onchain_connector(client).await?;
-            }
-            NodeAdapter::OffChainConnector => {
-                let connector = self
-                    .nibble_context
-                    .offchain_connectors
-                    .iter()
-                    .find(|c| c.id == node.adapter_id)
-                    .ok_or("OffChainConnector not found")?;
-                let response = connector.execute_offchain_connector(None).await?;
-                println!("OffChainConnector response: {:?}", response);
-            }
-        }
-
+        println!(
+            "Workflow execution complete. Total: {}, Successful: {}",
+            total_repeats, successful_repeats
+        );
         Ok(())
     }
 
@@ -582,7 +610,7 @@ impl Workflow {
             Value::Array(
                 self.links
                     .iter()
-                    .map(|link| Value::Object(link.to_json()))
+                    .map(|link| Value::Object(link.1.to_json()))
                     .collect(),
             ),
         );
@@ -591,7 +619,7 @@ impl Workflow {
             Value::Array(
                 self.nodes
                     .iter()
-                    .map(|node| Value::Object(node.to_json()))
+                    .map(|node| Value::Object(node.1.to_json()))
                     .collect(),
             ),
         );
@@ -617,16 +645,17 @@ impl Workflow {
         let mut in_degree: HashMap<Vec<u8>, usize> = HashMap::new();
         let mut graph: HashMap<Vec<u8>, Vec<Vec<u8>>> = HashMap::new();
 
-        for node in &self.nodes {
+        for node in self.nodes.values() {
             in_degree.insert(node.id.clone(), 0);
             graph.insert(node.id.clone(), Vec::new());
         }
-        for link in &self.links {
+
+        for link in self.links.values() {
             graph
-                .entry(link.from_node.clone())
+                .entry(link.adapter_id.clone())
                 .or_default()
-                .push(link.to_node.clone());
-            *in_degree.entry(link.to_node.clone()).or_default() += 1;
+                .push(link.id.clone());
+            *in_degree.entry(link.id.clone()).or_default() += 1;
         }
 
         let mut stack: Vec<Vec<u8>> = in_degree
@@ -634,11 +663,12 @@ impl Workflow {
             .filter(|(_, &deg)| deg == 0)
             .map(|(id, _)| id.clone())
             .collect();
-        let mut sorted = Vec::new();
 
-        while let Some(node) = stack.pop() {
-            sorted.push(node.clone());
-            if let Some(neighbors) = graph.get(&node) {
+        let mut sorted: Vec<Vec<u8>> = Vec::new();
+
+        while let Some(current) = stack.pop() {
+            sorted.push(current.clone());
+            if let Some(neighbors) = graph.get(&current) {
                 for neighbor in neighbors {
                     if let Some(degree) = in_degree.get_mut(neighbor) {
                         *degree -= 1;
@@ -650,58 +680,92 @@ impl Workflow {
             }
         }
 
-        if sorted.len() != self.nodes.len() {
-            return Err("Cyclic dependency detected in workflow".to_string());
+        if sorted.len() != self.nodes.len() + self.links.len() {
+            return Err("Cyclic dependency detected in the workflow".to_string());
         }
 
         Ok(sorted)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ExecutionContext {
-    pub data_store: HashMap<String, Value>,
+#[derive(Debug)]
+pub struct SubflowManager {
+    sender: mpsc::Sender<SubflowRequest>,
 }
 
-impl ExecutionContext {
+#[derive(Debug)]
+pub struct SubflowRequest {
+    subflow: Arc<Workflow>,
+    repetitions: Option<u32>,
+    count_successes: bool,
+    blocking: bool,
+    responder: Option<oneshot::Sender<Result<(), String>>>,
+}
+
+impl SubflowManager {
     pub fn new() -> Self {
-        Self {
-            data_store: HashMap::new(),
-        }
-    }
+        let (sender, mut receiver) = mpsc::channel(100);
 
-    pub fn set(&mut self, key: &str, value: Value) {
-        self.data_store.insert(key.to_string(), value);
-    }
+        tokio::spawn(async move {
+            while let Some(request) = receiver.recv().await {
+                let SubflowRequest {
+                    subflow,
+                    repetitions,
+                    count_successes,
+                    blocking,
+                    responder,
+                } = request;
 
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.data_store.get(key)
-    }
-}
-
-pub struct WorkflowManager {
-    pub workflows: HashMap<Vec<u8>, Workflow>,
-}
-
-impl WorkflowManager {
-    pub async fn execute_workflow(
-        &mut self,
-        workflow_id: Vec<u8>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let mut context = ExecutionContext::new();
-
-        if let Some(workflow) = self.workflows.get(&workflow_id) {
-            workflow.execute(&mut context).await?;
-
-            for dependent_id in &workflow.dependent_workflows {
-                if let Some(dependent_workflow) = self.workflows.get(dependent_id) {
-                    dependent_workflow.execute(&mut context).await?;
+                if blocking {
+                    let result = subflow.execute(repetitions, count_successes).await;
+                    if let Some(responder) = responder {
+                        let _ = responder.send(result.map_err(|e| e.to_string()));
+                    }
+                } else {
+                    tokio::spawn(async move {
+                        let _ = subflow.execute(repetitions, count_successes).await;
+                    });
                 }
             }
-        } else {
-            return Err(format!("Workflow with ID {:?} not found", workflow_id).into());
-        }
+        });
 
-        Ok(())
+        Self { sender }
+    }
+
+    pub async fn execute_subflow(
+        &self,
+        subflow: Arc<Workflow>,
+        repetitions: Option<u32>,
+        count_successes: bool,
+        blocking: bool,
+    ) -> Option<Result<(), String>> {
+        if blocking {
+            let (responder, receiver) = oneshot::channel();
+            let _ = self
+                .sender
+                .send(SubflowRequest {
+                    subflow,
+                    repetitions,
+                    count_successes,
+                    blocking,
+                    responder: Some(responder),
+                })
+                .await;
+
+            receiver.await.ok()
+        } else {
+            let _ = self
+                .sender
+                .send(SubflowRequest {
+                    subflow,
+                    repetitions,
+                    count_successes,
+                    blocking,
+                    responder: None,
+                })
+                .await;
+
+            None
+        }
     }
 }

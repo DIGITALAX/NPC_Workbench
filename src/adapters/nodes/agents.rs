@@ -1,7 +1,9 @@
 use crate::{nibble::Adaptable, utils::generate_unique_id};
 use ethers::{core::rand::thread_rng, prelude::*};
+use regex::Regex;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
-use std::{error::Error, str::FromStr};
+use std::{error::Error, iter::Iterator, str::FromStr};
 
 #[derive(Debug, Clone)]
 pub enum LLMModel {
@@ -39,6 +41,42 @@ pub enum LLMModel {
 }
 
 #[derive(Debug, Clone)]
+pub struct Objective {
+    pub description: String,
+    pub priority: u8,
+    pub generated: bool,
+}
+
+impl TryFrom<&Value> for Objective {
+    type Error = String;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        let description = value
+            .get("description")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing or invalid 'description' field".to_string())?
+            .to_string();
+
+        let priority = value
+            .get("priority")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| "Missing or invalid 'priority' field".to_string())?
+            as u8;
+
+        let generated = value
+            .get("generated")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| "Missing or invalid 'generated' field".to_string())?;
+
+        Ok(Objective {
+            description,
+            priority,
+            generated,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Agent {
     pub name: String,
     pub id: Vec<u8>,
@@ -52,6 +90,7 @@ pub struct Agent {
     pub encrypted: bool,
     pub lens_account: Option<String>,
     pub farcaster_account: Option<String>,
+    pub objectives: Vec<Objective>,
 }
 
 pub fn configure_new_agent(
@@ -67,6 +106,7 @@ pub fn configure_new_agent(
     wallet_address: Option<&H160>,
     lens_account: Option<&str>,
     farcaster_account: Option<&str>,
+    objectives: Vec<Objective>,
 ) -> Result<Agent, Box<dyn Error + Send + Sync>> {
     let mut wallet = LocalWallet::new(&mut thread_rng());
 
@@ -87,6 +127,7 @@ pub fn configure_new_agent(
         wallet: wallet.clone(),
         lens_account: lens_account.map(|s| s.to_string()),
         farcaster_account: farcaster_account.map(|s| s.to_string()),
+        objectives,
     };
 
     Ok(agent)
@@ -279,7 +320,15 @@ impl Agent {
                         "presence_penalty": presence_penalty
                     }))
                     .send()
-                    .await?;
+                    .await;
+
+                let response = match response {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        eprintln!("Error sending request to OpenAI API: {}", e);
+                        return Err(e.into());
+                    }
+                };
 
                 let response_json: Value = response.json().await?;
                 let completion = response_json["choices"][0]["text"]
@@ -305,7 +354,7 @@ impl Agent {
 
                 let client = reqwest::Client::new();
                 let response = client
-                    .post(format!("https://api.anthropic.com/v1/claude/{model}"))
+                    .post(format!("https://api.anthropic.com/v1/claude/{}", model))
                     .header("Authorization", format!("Bearer {}", api_key))
                     .json(&serde_json::json!({
                         "prompt": prompt,
@@ -315,7 +364,15 @@ impl Agent {
                         "top_p": top_p
                     }))
                     .send()
-                    .await?;
+                    .await;
+
+                let response = match response {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        eprintln!("Error sending request to Claude API: {}", e);
+                        return Err(e.into());
+                    }
+                };
 
                 let response_json: Value = response.json().await?;
                 let completion = response_json["completion"]
@@ -347,15 +404,104 @@ impl Agent {
                         "presence_penalty": presence_penalty
                     }))
                     .send()
-                    .await?;
+                    .await;
+
+                let response = match response {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        eprintln!("Error sending request to Ollama API: {}", e);
+                        return Err(e.into());
+                    }
+                };
 
                 let response_json: Value = response.json().await?;
                 let completion = response_json["text"].as_str().unwrap_or("").to_string();
                 Ok(completion)
             }
             LLMModel::Other { config } => {
-                return Err("Execution for Other model type is not implemented.".into());
+                let url = config.get("url").ok_or("Missing 'url' in configuration.")?;
+                let default_method = String::from("POST");
+                let method = config.get("method").unwrap_or(&default_method);
+                let headers: HeaderMap = config
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("header_"))
+                    .map(|(key, value)| {
+                        let header_name =
+                            HeaderName::from_bytes(key.trim_start_matches("header_").as_bytes())
+                                .map_err(|e| format!("Invalid header name: {}", e))?;
+                        let header_value = HeaderValue::from_str(value)
+                            .map_err(|e| format!("Invalid header value: {}", e))?;
+                        Ok((header_name, header_value))
+                    })
+                    .collect::<Result<HeaderMap, String>>()?;
+
+                let client = reqwest::Client::new();
+
+                let mut request = match method.as_str() {
+                    "GET" => client.get(url),
+                    "POST" => client.post(url),
+                    "PUT" => client.put(url),
+                    "DELETE" => client.delete(url),
+                    _ => return Err(format!("Unsupported HTTP method: {}", method).into()),
+                };
+
+                if !headers.is_empty() {
+                    request = request.headers(headers);
+                }
+
+                if let Some(body) = config.get("body") {
+                    request = request.json(&serde_json::from_str::<Value>(body)?);
+                }
+
+                let response: Result<reqwest::Response, reqwest::Error> = request.send().await;
+
+                let response = match response {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        eprintln!("Error sending request to custom API: {}", e);
+                        return Err(e.into());
+                    }
+                };
+
+                let response_json: Value = response.json().await?;
+                let completion = response_json["result"]
+                    .as_str()
+                    .unwrap_or("No result field found in response.")
+                    .to_string();
+
+                Ok(completion)
             }
         }
+    }
+
+    pub fn add_objective(&mut self, description: &str, priority: u8, generated: bool) {
+        let objective = Objective {
+            description: description.to_string(),
+            priority,
+            generated,
+        };
+        self.objectives.push(objective);
+        self.objectives.sort_by(|a, b| b.priority.cmp(&a.priority));
+    }
+
+    pub async fn generate_objectives(
+        &mut self,
+        input_context: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let prompt = format!(
+            "As a {} with the personality '{}', what objectives should you focus on given the following context: {}. List each objective on a new line and include a ranking (priority) between 1 and 10, where 10 is the highest priority. Format: Objective: <description>, Priority: <1-10>.",
+            self.role, self.personality, input_context
+        );
+
+        let generated_objective = self.execute_agent(&prompt).await?;
+
+        let re = Regex::new(r"Objective:\s*(.+),\s*Priority:\s*(\d+)")?;
+        for cap in re.captures_iter(&generated_objective) {
+            let description = cap[1].trim().to_string();
+            let priority: u8 = cap[2].parse().unwrap_or(1);
+            self.add_objective(&description, priority, true);
+        }
+
+        Ok(())
     }
 }

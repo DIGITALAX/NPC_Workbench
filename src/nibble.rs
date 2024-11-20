@@ -1,14 +1,18 @@
 use crate::{
     adapters::{
-        agents::{self, Agent, LLMModel},
-        conditions::{configure_new_condition, Condition, ConditionType},
-        connectors::{
-            off_chain::{configure_new_offchain_connector, OffChainConnector},
-            on_chain::{configure_new_onchain_connector, OnChainConnector},
+        links::{
+            conditions::{configure_new_condition, Condition, ConditionType},
+            evaluations::{configure_new_evaluation, Evaluation, EvaluationType},
+            fhe_gates::{configure_new_gate, FHEGate},
         },
-        evaluations::{configure_new_evaluation, Evaluation, EvaluationType},
-        fhe_gates::{configure_new_gate, FHEGate},
-        listeners::{configure_new_listener, Listener, ListenerType},
+        nodes::{
+            agents::{self, Agent, LLMModel, Objective},
+            connectors::{
+                off_chain::{configure_new_offchain_connector, OffChainConnector},
+                on_chain::{configure_new_onchain_connector, OnChainConnector},
+            },
+            listeners::{configure_new_listener, Listener, ListenerType},
+        },
     },
     constants::NIBBLE_FACTORY_CONTRACT,
     encrypt::encrypt_with_public_key,
@@ -268,16 +272,12 @@ impl Nibble {
         name: &str,
         event_name: &str,
         listener_type: ListenerType,
-        condition_fn: fn(Value) -> bool,
-        expected_value: Option<Value>,
         encrypted: bool,
     ) -> Result<AdapterHandle<'_, Listener>, Box<dyn Error + Send + Sync>> {
         let listener = configure_new_listener(
             name,
             event_name,
             listener_type,
-            condition_fn,
-            expected_value,
             encrypted,
             &self.owner_wallet.address(),
         )?;
@@ -412,6 +412,7 @@ impl Nibble {
         agent_wallet: Option<&H160>,
         lens_account: Option<&str>,
         farcaster_account: Option<&str>,
+        objectives: Vec<Objective>,
     ) -> Result<AdapterHandle<'_, Agent>, Box<dyn Error + Send + Sync>> {
         let agent = agents::configure_new_agent(
             name,
@@ -426,6 +427,7 @@ impl Nibble {
             agent_wallet,
             farcaster_account,
             lens_account,
+            objectives,
         )?;
 
         self.agents.push(agent.clone());
@@ -591,9 +593,13 @@ impl Nibble {
         &mut self,
         id: Vec<u8>,
     ) -> Result<Nibble, Box<dyn Error + Send + Sync>> {
-        let response =
-            load_nibble_from_subgraph(id, self.graph_api_key.clone(), self.owner_wallet.clone())
-                .await?;
+        let response = load_nibble_from_subgraph(
+            id,
+            self.graph_api_key.clone(),
+            self.owner_wallet.clone(),
+            self.provider.clone(),
+        )
+        .await?;
         self.contracts = response.contracts;
         self.saved_conditions = response.conditions;
         self.saved_listeners = response.listeners;
@@ -722,6 +728,7 @@ impl Nibble {
             self.id.as_ref().unwrap().clone(),
             self.graph_api_key.clone(),
             self.owner_wallet.clone(),
+            self.provider.clone(),
         )
         .await?;
         self.contracts = response.contracts;
@@ -833,6 +840,7 @@ impl Nibble {
             self.id.as_ref().unwrap().clone(),
             self.graph_api_key.clone(),
             self.owner_wallet.clone(),
+            self.provider.clone(),
         )
         .await
         .map_err(|e| Box::<dyn Error + Send + Sync>::from(e))?;
@@ -853,9 +861,8 @@ impl Nibble {
         Workflow {
             id: generate_unique_id(&self.owner_wallet.address()),
             name: name.to_string(),
-            nodes: vec![],
-            links: vec![],
-            dependent_workflows: vec![],
+            nodes: HashMap::new(),
+            links: HashMap::new(),
             nibble_context: Arc::new(self.clone()),
             encrypted,
         }
@@ -881,7 +888,6 @@ impl Nibble {
             name: workflow.name,
             nodes: workflow.nodes,
             links: workflow.links,
-            dependent_workflows: workflow.dependent_workflows,
             nibble_context: Arc::new(self.clone()),
             encrypted: workflow.encrypted,
         })
@@ -1266,6 +1272,7 @@ where
             self.nibble.id.as_ref().unwrap().clone(),
             self.nibble.graph_api_key.clone(),
             self.nibble.owner_wallet.clone(),
+            self.nibble.provider.clone(),
         )
         .await?;
         self.nibble.contracts = response.contracts;
@@ -1492,6 +1499,7 @@ where
             self.nibble.id.as_ref().unwrap().clone(),
             self.nibble.graph_api_key.clone(),
             self.nibble.owner_wallet.clone(),
+            self.nibble.provider.clone(),
         )
         .await?;
         self.nibble.contracts = response.contracts;
