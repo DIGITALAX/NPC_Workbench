@@ -1,3 +1,5 @@
+use crate::{nibble::Adaptable, utils::generate_unique_id};
+use bincode::{deserialize, serialize};
 use ethers::{
     abi::Abi,
     contract::Contract,
@@ -6,9 +8,9 @@ use ethers::{
     signers::{LocalWallet, Signer},
     types::{Chain, H160},
 };
+use serde::{Deserialize, Serialize};
 use std::{error::Error, fs::File, io::Read, path::Path, sync::Arc};
-
-use crate::{nibble::Adaptable, utils::generate_unique_id};
+use tfhe::{generate_keys, prelude::*, ClientKey, ConfigBuilder, FheUint8, ServerKey};
 
 #[derive(Debug, Clone)]
 pub struct FHEGate {
@@ -56,6 +58,7 @@ impl FHEGate {
         &self,
         encrypted_value: Vec<u8>,
         criterion: Option<Vec<u8>>,
+        client_key: ClientKey,
         provider: Provider<Http>,
         wallet: LocalWallet,
     ) -> Result<bool, Box<dyn Error + Send + Sync>> {
@@ -105,4 +108,41 @@ impl FHEGate {
             Ok(false)
         }
     }
+}
+
+pub fn decrypt_fhe<T>(
+    client_key: ClientKey,
+    encrypted_data: Vec<FheUint8>,
+) -> Result<T, Box<dyn Error>>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    let mut decrypted_data = Vec::new();
+    for encrypted_byte in encrypted_data.iter() {
+        let decrypted_byte: u8 = encrypted_byte.decrypt(&client_key);
+        decrypted_data.push(decrypted_byte);
+    }
+
+    let deserialized_data: T = deserialize(&decrypted_data)?;
+
+    Ok(deserialized_data)
+}
+
+pub fn encrypt_fhe<T>(data: &T) -> Result<(ClientKey, ServerKey, Vec<FheUint8>), Box<dyn Error>>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    let config = ConfigBuilder::default().build();
+
+    let (client_key, server_keys) = generate_keys(config);
+
+    let serialized_data = serialize(data)?;
+
+    let mut encrypted_data = Vec::new();
+    for byte in serialized_data.iter() {
+        let encrypted_byte = FheUint8::try_encrypt(*byte, &client_key)?;
+        encrypted_data.push(encrypted_byte);
+    }
+
+    Ok((client_key, server_keys, encrypted_data))
 }

@@ -732,12 +732,6 @@ impl Workflow {
                                 .find(|fhe_gate| fhe_gate.id == *link.adapter_id);
 
                             if let Some(fhe_gate) = fhe_gate_found {
-                                let input_context = link
-                                    .context
-                                    .as_ref()
-                                    .and_then(|v| v.as_str())
-                                    .and_then(|s| hex::decode(s).ok());
-
                                 let encrypted_value_option = if let Some(v) = context_data {
                                     if let Some(s) = v.as_str() {
                                         hex::decode(s).ok()
@@ -750,23 +744,38 @@ impl Workflow {
 
                                 match encrypted_value_option {
                                     Some(encrypted_value) => {
-                                        match fhe_gate
-                                            .check_fhe_gate(
-                                                encrypted_value,
-                                                input_context,
-                                                self.nibble_context.provider.clone(),
-                                                self.nibble_context.owner_wallet.clone(),
-                                            )
-                                            .await
-                                        {
-                                            Ok(response) => {
-                                                println!("FHEGate response: {:?}", response);
-                                                Some(Value::String("FHEGate Success".to_string()))
+                                        if let Some(context) = &link.context {
+                                            match fhe_gate
+                                                .check_fhe_gate(
+                                                    encrypted_value,
+                                                    context
+                                                        .get("criterion")
+                                                        .and_then(|v| v.as_str())
+                                                        .map(|s| s.as_bytes().to_vec()),
+                                                    context
+                                                        .get("client_key")
+                                                        .and_then(|v| {
+                                                            serde_json::from_value(v.clone()).ok()
+                                                        })
+                                                        .unwrap(),
+                                                    self.nibble_context.provider.clone(),
+                                                    self.nibble_context.owner_wallet.clone(),
+                                                )
+                                                .await
+                                            {
+                                                Ok(response) => {
+                                                    println!("FHEGate response: {:?}", response);
+                                                    Some(Value::String(
+                                                        "FHEGate Success".to_string(),
+                                                    ))
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("FHEGate execution failed: {:?}", e);
+                                                    None
+                                                }
                                             }
-                                            Err(e) => {
-                                                eprintln!("FHEGate execution failed: {:?}", e);
-                                                None
-                                            }
+                                        } else {
+                                            None
                                         }
                                     }
 
