@@ -88,12 +88,19 @@ impl WorkflowNode {
 }
 
 #[derive(Debug, Clone)]
+pub struct LinkTarget {
+    pub true_target_id: Vec<u8>,
+    pub false_target_id: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct WorkflowLink {
     pub id: Vec<u8>,
     pub adapter_id: Vec<u8>,
     pub adapter_type: LinkAdapter,
     pub repetitions: Option<u32>,
     pub context: Option<Value>,
+    pub target: Option<LinkTarget>,
 }
 
 impl WorkflowLink {
@@ -157,6 +164,7 @@ impl Workflow {
         adapter_type: LinkAdapter,
         repetitions: Option<u32>,
         context: Option<Value>,
+        target: Option<LinkTarget>,
     ) -> &mut Self {
         let id = generate_unique_id(&self.nibble_context.owner_wallet.address());
         self.links.insert(
@@ -167,6 +175,7 @@ impl Workflow {
                 adapter_type,
                 repetitions,
                 context,
+                target,
             },
         );
         self
@@ -370,303 +379,14 @@ impl Workflow {
 
             for element_id in self.topological_sort()? {
                 if let Some(node) = self.nodes.get(&element_id) {
-                    context_data = match node.adapter_type.clone() {
-                        NodeAdapter::Agent => {
-                            let agent_found = self
-                                .nibble_context
-                                .agents
-                                .iter()
-                                .find(|agent| agent.id == *node.adapter_id);
-                            if let Some(agent) = agent_found {
-                                println!("Executing Agent: {:?}", node.id);
-
-                                let input_context = node
-                                    .context
-                                    .as_ref()
-                                    .map_or("", |v| v.as_str().unwrap_or(""));
-
-                                match agent.execute_agent(input_context).await {
-                                    Ok(result) => {
-                                        println!("Agent Result: {}", result);
-
-                                        self.execution_history.push(ExecutionHistory {
-                                            element_id: node.id.clone(),
-                                            element_type: Adapter::Agent.to_string(),
-                                            result: Some(Value::String(result.clone())),
-                                            timestamp: chrono::Utc::now(),
-                                        });
-                                        Some(Value::String(result))
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Agent execution failed: {:?}", e);
-                                        self.execution_history.push(ExecutionHistory {
-                                            element_id: node.id.clone(),
-                                            element_type: Adapter::Agent.to_string(),
-                                            result: None,
-                                            timestamp: chrono::Utc::now(),
-                                        });
-                                        None
-                                    }
-                                }
-                            } else {
-                                eprintln!("Agent not found for ID: {:?}", node.adapter_id);
-                                self.execution_history.push(ExecutionHistory {
-                                    element_id: node.id.clone(),
-                                    element_type: Adapter::Agent.to_string(),
-                                    result: None,
-                                    timestamp: chrono::Utc::now(),
-                                });
-                                None
-                            }
-                        }
-                        NodeAdapter::Listener => {
-                            println!("Waiting on Listener: {:?}", node.id);
-
-                            let listener_found = self
-                                .nibble_context
-                                .listeners
-                                .iter()
-                                .find(|listener| listener.id == *node.adapter_id);
-
-                            if let Some(listener) = listener_found {
-                                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-
-                                let listener_task = tokio::spawn({
-                                    let listener = listener.clone();
-                                    async move {
-                                        if let Err(e) = listener.listen_and_trigger(tx).await {
-                                            eprintln!("Error in listener: {:?}", e);
-                                        }
-                                    }
-                                });
-
-                                let result = match rx.recv().await {
-                                    Some(event_data) => {
-                                        println!("Listener triggered with data: {:?}", event_data);
-                                        self.execution_history.push(ExecutionHistory {
-                                            element_id: node.id.clone(),
-                                            element_type: Adapter::Listener.to_string(),
-                                            result: Some(event_data.clone()),
-                                            timestamp: chrono::Utc::now(),
-                                        });
-                                        Some(event_data)
-                                    }
-                                    None => {
-                                        eprintln!("Listener did not produce any result.");
-                                        current_success = false;
-                                        self.execution_history.push(ExecutionHistory {
-                                            element_id: node.id.clone(),
-                                            element_type: Adapter::Listener.to_string(),
-                                            result: None,
-                                            timestamp: chrono::Utc::now(),
-                                        });
-                                        None
-                                    }
-                                };
-
-                                if let Err(e) = listener_task.await {
-                                    eprintln!("Listener task failed: {:?}", e);
-                                    self.execution_history.push(ExecutionHistory {
-                                        element_id: node.id.clone(),
-                                        element_type: Adapter::Listener.to_string(),
-                                        result: None,
-                                        timestamp: chrono::Utc::now(),
-                                    });
-                                }
-
-                                result
-                            } else {
-                                eprintln!("Listener not found for ID: {:?}", node.adapter_id);
-                                current_success = false;
-                                None
-                            }
-                        }
-                        NodeAdapter::OnChainConnector => {
-                            let connector_found = self
-                                .nibble_context
-                                .onchain_connectors
-                                .iter()
-                                .find(|connector| connector.id == *node.adapter_id);
-
-                            if let Some(onchain_connector) = connector_found {
-                                println!("Executing OnChainConnector: {:?}", node.id);
-
-                                let wallet = if let Some(context) = &node.context {
-                                    if let Some(wallet_name) = context.get("agent_wallet") {
-                                        if let Some(agent_id) = wallet_name.as_str() {
-                                            let agent_wallet =
-                                                self.nodes.values().find_map(|node| {
-                                                    if let NodeAdapter::Agent = node.adapter_type {
-                                                        if node.adapter_id
-                                                            == agent_id.as_bytes().to_vec()
-                                                        {
-                                                            Some(
-                                                                self.nibble_context
-                                                                    .agents
-                                                                    .iter()
-                                                                    .find(|agent| {
-                                                                        agent.id
-                                                                            == agent_id
-                                                                                .as_bytes()
-                                                                                .to_vec()
-                                                                    })?
-                                                                    .wallet
-                                                                    .clone(),
-                                                            )
-                                                        } else {
-                                                            None
-                                                        }
-                                                    } else {
-                                                        None
-                                                    }
-                                                });
-
-                                            if let Some(wallet) = agent_wallet {
-                                                wallet
-                                            } else {
-                                                eprintln!("Agent with ID {:?} not found, using owner_wallet", agent_id);
-                                                self.nibble_context.owner_wallet.clone()
-                                            }
-                                        } else {
-                                            eprintln!(
-                                                "Invalid agent_wallet context, using owner_wallet"
-                                            );
-                                            self.nibble_context.owner_wallet.clone()
-                                        }
-                                    } else if let Some(custom_wallet) = context.get("custom_wallet")
-                                    {
-                                        if let Some(wallet_str) = custom_wallet.as_str() {
-                                            let parsed_wallet = Wallet::from_str(wallet_str)
-                                                .map_err(|e| {
-                                                    eprintln!(
-                                                        "Failed to parse custom wallet: {:?}",
-                                                        e
-                                                    );
-                                                    e
-                                                });
-                                            match parsed_wallet {
-                                                Ok(wallet) => wallet,
-                                                Err(_) => {
-                                                    eprintln!(
-                                                        "Invalid custom wallet, using owner_wallet"
-                                                    );
-                                                    self.nibble_context.owner_wallet.clone()
-                                                }
-                                            }
-                                        } else {
-                                            eprintln!(
-                                                "Invalid custom_wallet context, using owner_wallet"
-                                            );
-                                            self.nibble_context.owner_wallet.clone()
-                                        }
-                                    } else {
-                                        self.nibble_context.owner_wallet.clone()
-                                    }
-                                } else {
-                                    self.nibble_context.owner_wallet.clone()
-                                };
-
-                                match onchain_connector
-                                    .execute_onchain_connector(
-                                        self.nibble_context.provider.clone(),
-                                        wallet,
-                                    )
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        println!(
-                                            "OnChainConnector executed successfully: {:?}",
-                                            node.id
-                                        );
-                                        Some(Value::String("OnChainConnector Success".to_string()))
-                                    }
-                                    Err(e) => {
-                                        eprintln!("OnChainConnector execution failed: {:?}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                eprintln!(
-                                    "OnChainConnector not found for ID: {:?}",
-                                    node.adapter_id
-                                );
-                                None
-                            }
-                        }
-
-                        NodeAdapter::OffChainConnector => {
-                            let connector_found = self
-                                .nibble_context
-                                .offchain_connectors
-                                .iter()
-                                .find(|connector| connector.id == *node.adapter_id);
-
-                            if let Some(offchain_connector) = connector_found {
-                                println!("Executing OffChainConnector: {:?}", node.id);
-
-                                match offchain_connector
-                                    .execute_request(context_data.clone())
-                                    .await
-                                {
-                                    Ok(response) => {
-                                        println!("OffChainConnector response: {:?}", response);
-                                        Some(response)
-                                    }
-                                    Err(e) => {
-                                        eprintln!("OffChainConnector execution failed: {:?}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                eprintln!(
-                                    "OffChainConnector not found for ID: {:?}",
-                                    node.adapter_id
-                                );
-                                None
-                            }
-                        }
-
-                        NodeAdapter::SubFlow {
-                            subflow,
-                            blocking,
-                            repetitions,
-                            count_successes,
-                        } => {
-                            println!("Executing SubFlow: {:?}", subflow.id);
-
-                            if blocking {
-                                let result = subflow_manager
-                                    .execute_subflow(
-                                        Arc::new(Mutex::new(*subflow.clone())),
-                                        repetitions,
-                                        count_successes,
-                                        true,
-                                    )
-                                    .await;
-
-                                match result {
-                                    Some(Ok(_)) => {
-                                        Some(Value::String("Blocking SubFlow Success".to_string()))
-                                    }
-                                    Some(Err(e)) => {
-                                        eprintln!("Blocking SubFlow failed: {:?}", e);
-                                        None
-                                    }
-                                    None => None,
-                                }
-                            } else {
-                                subflow_manager
-                                    .execute_subflow(
-                                        Arc::new(Mutex::new(*subflow.clone())),
-                                        repetitions,
-                                        count_successes,
-                                        false,
-                                    )
-                                    .await;
-                                Some(Value::String("Non-blocking SubFlow Started".to_string()))
-                            }
-                        }
-                    };
+                    context_data = self
+                        .process_node(
+                            &node.clone(),
+                            Some(&subflow_manager),
+                            context_data,
+                            &mut current_success,
+                        )
+                        .await?;
 
                     if context_data.is_none() {
                         println!("Execution stopped for repetition: {}", total_repeats + 1);
@@ -674,212 +394,9 @@ impl Workflow {
                         break;
                     }
                 } else if let Some(link) = self.links.get(&element_id) {
-                    context_data = match link.adapter_type {
-                        LinkAdapter::Condition => {
-                            println!("Processing Condition: {:?}", link.id);
-
-                            let condition_found = self
-                                .nibble_context
-                                .conditions
-                                .iter()
-                                .find(|condition| condition.id == *link.adapter_id);
-
-                            if let Some(condition) = condition_found {
-                                match condition.check_condition(&self.nibble_context).await {
-                                    Ok(response) => {
-                                        println!("Condition response: {:?}", response);
-
-                                        self.execution_history.push(ExecutionHistory {
-                                            element_id: link.id.clone(),
-                                            element_type: Adapter::Condition.to_string(),
-                                            result: Some(Value::String(
-                                                "Condition Success".to_string(),
-                                            )),
-                                            timestamp: chrono::Utc::now(),
-                                        });
-                                        Some(Value::String("Condition Success".to_string()))
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Condition execution failed: {:?}", e);
-
-                                        self.execution_history.push(ExecutionHistory {
-                                            element_id: link.id.clone(),
-                                            element_type: Adapter::Condition.to_string(),
-                                            result: None,
-                                            timestamp: chrono::Utc::now(),
-                                        });
-                                        None
-                                    }
-                                }
-                            } else {
-                                eprintln!("Condition not found for ID: {:?}", link.adapter_id);
-
-                                self.execution_history.push(ExecutionHistory {
-                                    element_id: link.id.clone(),
-                                    element_type: Adapter::Condition.to_string(),
-                                    result: None,
-                                    timestamp: chrono::Utc::now(),
-                                });
-                                None
-                            }
-                        }
-                        LinkAdapter::FHEGate => {
-                            println!("Processing FHEGate: {:?}", link.id);
-                            let fhe_gate_found = self
-                                .nibble_context
-                                .fhe_gates
-                                .iter()
-                                .find(|fhe_gate| fhe_gate.id == *link.adapter_id);
-
-                            if let Some(fhe_gate) = fhe_gate_found {
-                                let encrypted_value_option = if let Some(v) = context_data {
-                                    if let Some(s) = v.as_str() {
-                                        hex::decode(s).ok()
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-
-                                match encrypted_value_option {
-                                    Some(encrypted_value) => {
-                                        if let Some(context) = &link.context {
-                                            match fhe_gate
-                                                .check_fhe_gate(
-                                                    encrypted_value,
-                                                    context
-                                                        .get("criterion")
-                                                        .and_then(|v| v.as_str())
-                                                        .map(|s| s.as_bytes().to_vec()),
-                                                    context
-                                                        .get("client_key")
-                                                        .and_then(|v| {
-                                                            serde_json::from_value(v.clone()).ok()
-                                                        })
-                                                        .unwrap(),
-                                                    self.nibble_context.provider.clone(),
-                                                    self.nibble_context.owner_wallet.clone(),
-                                                )
-                                                .await
-                                            {
-                                                Ok(response) => {
-                                                    println!("FHEGate response: {:?}", response);
-                                                    Some(Value::String(
-                                                        "FHEGate Success".to_string(),
-                                                    ))
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("FHEGate execution failed: {:?}", e);
-                                                    None
-                                                }
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    }
-
-                                    None => {
-                                        eprintln!(
-                                            "Encrypted value from previous node not found for ID: {:?}",
-                                            link.adapter_id
-                                        );
-                                        None
-                                    }
-                                }
-                            } else {
-                                eprintln!("FHEGate not found for ID: {:?}", link.adapter_id);
-                                None
-                            }
-                        }
-                        LinkAdapter::Evaluation => {
-                            println!("Processing Evaluation: {:?}", link.id);
-                            let evaluation_found = self
-                                .nibble_context
-                                .evaluations
-                                .iter()
-                                .find(|evaluation| evaluation.id == *link.adapter_id);
-
-                            if let Some(evaluation) = evaluation_found {
-                                let interaction_id = link
-                                    .context
-                                    .as_ref()
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|v| v.as_u64().map(|n| n as u8))
-                                            .collect::<Vec<u8>>()
-                                    })
-                                    .unwrap_or_else(Vec::new);
-
-                                let flow_previous_context = self
-                                    .execution_history
-                                    .iter()
-                                    .map(|entry| {
-                                        format!(
-                                            "Element ID: {}, Type: {}, Result: {:?}, Timestamp: {}",
-                                            hex::encode(&entry.element_id),
-                                            entry.element_type,
-                                            entry.result.clone().unwrap_or(Value::Null),
-                                            entry.timestamp
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                let executed_ids: Vec<Vec<u8>> = self
-                                    .execution_history
-                                    .iter()
-                                    .map(|entry| entry.element_id.clone())
-                                    .collect();
-
-                                let flow_next_steps = self
-                                    .topological_sort()?
-                                    .iter()
-                                    .filter(|id| !executed_ids.contains(id))
-                                    .map(|id| {
-                                        if let Some(node) = self.nodes.get(id) {
-                                            format!(
-                                                "Node ID: {}, Adapter Type: {:?}",
-                                                hex::encode(&node.id),
-                                                node.adapter_type
-                                            )
-                                        } else if let Some(link) = self.links.get(id) {
-                                            format!(
-                                                "Link ID: {}, Adapter Type: {:?}",
-                                                hex::encode(&link.id),
-                                                link.adapter_type
-                                            )
-                                        } else {
-                                            format!("Unknown element ID: {}", hex::encode(id))
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-
-                                match evaluation
-                                    .check_evaluation(
-                                        self.nibble_context.agents.clone(),
-                                        Some(&flow_previous_context),
-                                        Some(&flow_next_steps),
-                                        interaction_id,
-                                    )
-                                    .await
-                                {
-                                    Ok(response) => {
-                                        println!("Evaluation response: {:?}", response);
-                                        Some(Value::String("Evaluation Success".to_string()))
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Evaluation execution failed: {:?}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                eprintln!("Evaluation not found for ID: {:?}", link.adapter_id);
-                                None
-                            }
-                        }
-                    };
+                    context_data = self
+                        .process_link(&link.clone(), context_data, &mut current_success)
+                        .await?;
 
                     if context_data.is_none() {
                         println!("Execution stopped for repetition: {}", total_repeats + 1);
@@ -1019,6 +536,822 @@ impl Workflow {
 
     pub fn get_execution_history(&self) -> &Vec<ExecutionHistory> {
         &self.execution_history
+    }
+
+    async fn process_node(
+        &mut self,
+        node: &WorkflowNode,
+        subflow_manager: Option<&SubflowManager>,
+        context_data: Option<Value>,
+        current_success: &mut bool,
+    ) -> Result<Option<Value>, Box<dyn Error>> {
+        match node.adapter_type.clone() {
+            NodeAdapter::Agent => {
+                let agent_found = self
+                    .nibble_context
+                    .agents
+                    .iter()
+                    .find(|agent| agent.id == *node.adapter_id);
+                if let Some(agent) = agent_found {
+                    println!("Executing Agent: {:?}", node.id);
+
+                    let input_context = node
+                        .context
+                        .as_ref()
+                        .map_or("", |v| v.as_str().unwrap_or(""));
+
+                    match agent.execute_agent(input_context).await {
+                        Ok(result) => {
+                            println!("Agent Result: {}", result);
+
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::Agent.to_string(),
+                                result: Some(Value::String(result.clone())),
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(Some(Value::String(result)))
+                        }
+                        Err(e) => {
+                            eprintln!("Agent execution failed: {:?}", e);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::Agent.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    eprintln!("Agent not found for ID: {:?}", node.adapter_id);
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: node.id.clone(),
+                        element_type: Adapter::Agent.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+            NodeAdapter::Listener => {
+                println!("Waiting on Listener: {:?}", node.id);
+
+                let listener_found = self
+                    .nibble_context
+                    .listeners
+                    .iter()
+                    .find(|listener| listener.id == *node.adapter_id);
+
+                if let Some(listener) = listener_found {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+                    let listener_task = tokio::spawn({
+                        let listener = listener.clone();
+                        async move {
+                            if let Err(e) = listener.listen_and_trigger(tx).await {
+                                eprintln!("Error in listener: {:?}", e);
+                            }
+                        }
+                    });
+
+                    let result = match rx.recv().await {
+                        Some(event_data) => {
+                            println!("Listener triggered with data: {:?}", event_data);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::Listener.to_string(),
+                                result: Some(event_data.clone()),
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Some(event_data)
+                        }
+                        None => {
+                            eprintln!("Listener did not produce any result.");
+                            *current_success = false;
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::Listener.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            None
+                        }
+                    };
+
+                    if let Err(e) = listener_task.await {
+                        eprintln!("Listener task failed: {:?}", e);
+                        self.execution_history.push(ExecutionHistory {
+                            element_id: node.id.clone(),
+                            element_type: Adapter::Listener.to_string(),
+                            result: None,
+                            timestamp: chrono::Utc::now(),
+                        });
+                    }
+
+                    Ok(result)
+                } else {
+                    eprintln!("Listener not found for ID: {:?}", node.adapter_id);
+                    *current_success = false;
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: node.id.clone(),
+                        element_type: Adapter::Listener.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+            NodeAdapter::OnChainConnector => {
+                let connector_found = self
+                    .nibble_context
+                    .onchain_connectors
+                    .iter()
+                    .find(|connector| connector.id == *node.adapter_id);
+
+                if let Some(onchain_connector) = connector_found {
+                    println!("Executing OnChainConnector: {:?}", node.id);
+
+                    let wallet = if let Some(context) = &node.context {
+                        if let Some(wallet_name) = context.get("agent_wallet") {
+                            if let Some(agent_id) = wallet_name.as_str() {
+                                let agent_wallet = self.nodes.values().find_map(|node| {
+                                    if let NodeAdapter::Agent = node.adapter_type {
+                                        if node.adapter_id == agent_id.as_bytes().to_vec() {
+                                            Some(
+                                                self.nibble_context
+                                                    .agents
+                                                    .iter()
+                                                    .find(|agent| {
+                                                        agent.id == agent_id.as_bytes().to_vec()
+                                                    })?
+                                                    .wallet
+                                                    .clone(),
+                                            )
+                                        } else {
+                                            self.execution_history.push(ExecutionHistory {
+                                                element_id: node.id.clone(),
+                                                element_type: Adapter::OnChainConnector.to_string(),
+                                                result: None,
+                                                timestamp: chrono::Utc::now(),
+                                            });
+                                            None
+                                        }
+                                    } else {
+                                        self.execution_history.push(ExecutionHistory {
+                                            element_id: node.id.clone(),
+                                            element_type: Adapter::OnChainConnector.to_string(),
+                                            result: None,
+                                            timestamp: chrono::Utc::now(),
+                                        });
+                                        None
+                                    }
+                                });
+
+                                if let Some(wallet) = agent_wallet {
+                                    wallet
+                                } else {
+                                    eprintln!(
+                                        "Agent with ID {:?} not found, using owner_wallet",
+                                        agent_id
+                                    );
+                                    self.nibble_context.owner_wallet.clone()
+                                }
+                            } else {
+                                eprintln!("Invalid agent_wallet context, using owner_wallet");
+                                self.nibble_context.owner_wallet.clone()
+                            }
+                        } else if let Some(custom_wallet) = context.get("custom_wallet") {
+                            if let Some(wallet_str) = custom_wallet.as_str() {
+                                let parsed_wallet = Wallet::from_str(wallet_str).map_err(|e| {
+                                    eprintln!("Failed to parse custom wallet: {:?}", e);
+                                    e
+                                });
+                                match parsed_wallet {
+                                    Ok(wallet) => wallet,
+                                    Err(_) => {
+                                        eprintln!("Invalid custom wallet, using owner_wallet");
+                                        self.nibble_context.owner_wallet.clone()
+                                    }
+                                }
+                            } else {
+                                eprintln!("Invalid custom_wallet context, using owner_wallet");
+                                self.nibble_context.owner_wallet.clone()
+                            }
+                        } else {
+                            self.nibble_context.owner_wallet.clone()
+                        }
+                    } else {
+                        self.nibble_context.owner_wallet.clone()
+                    };
+
+                    match onchain_connector
+                        .execute_onchain_connector(self.nibble_context.provider.clone(), wallet)
+                        .await
+                    {
+                        Ok(result) => {
+                            println!("OnChainConnector executed successfully: {:?}", node.id);
+                            let receipt_value = serde_json::to_value(&result).map_err(|e| {
+                                println!("Failed to serialize TransactionReceipt: {:?}", e);
+                                e
+                            })?;
+
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::OnChainConnector.to_string(),
+                                result: Some(receipt_value.clone()),
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(Some(receipt_value))
+                        }
+                        Err(e) => {
+                            eprintln!("OnChainConnector execution failed: {:?}", e);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::OnChainConnector.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    eprintln!("OnChainConnector not found for ID: {:?}", node.adapter_id);
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: node.id.clone(),
+                        element_type: Adapter::OnChainConnector.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+
+            NodeAdapter::OffChainConnector => {
+                let connector_found = self
+                    .nibble_context
+                    .offchain_connectors
+                    .iter()
+                    .find(|connector| connector.id == *node.adapter_id);
+
+                if let Some(offchain_connector) = connector_found {
+                    println!("Executing OffChainConnector: {:?}", node.id);
+
+                    match offchain_connector
+                        .execute_request(context_data.clone())
+                        .await
+                    {
+                        Ok(response) => {
+                            println!("OffChainConnector response: {:?}", response);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::OffChainConnector.to_string(),
+                                result: Some(response.clone()),
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(Some(response))
+                        }
+                        Err(e) => {
+                            eprintln!("OffChainConnector execution failed: {:?}", e);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: Adapter::OffChainConnector.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    eprintln!("OffChainConnector not found for ID: {:?}", node.adapter_id);
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: node.id.clone(),
+                        element_type: Adapter::OffChainConnector.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+
+            NodeAdapter::SubFlow {
+                subflow,
+                blocking,
+                repetitions,
+                count_successes,
+            } => {
+                println!("Executing SubFlow: {:?}", subflow.id);
+
+                if blocking {
+                    let result = match subflow_manager {
+                        Some(manager) => {
+                            let result = manager
+                                .execute_subflow(
+                                    Arc::new(Mutex::new(*subflow.clone())),
+                                    repetitions,
+                                    count_successes,
+                                    true,
+                                )
+                                .await;
+
+                            result
+                        }
+                        None => None,
+                    };
+
+                    match result {
+                        Some(Ok(_)) => {
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: "Subflow".to_string(),
+                                result: Some(Value::String("Blocking SubFlow Success".to_string())),
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(Some(Value::String("Blocking SubFlow Success".to_string())))
+                        }
+                        Some(Err(e)) => {
+                            eprintln!("Blocking SubFlow failed: {:?}", e);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: "Subflow".to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                        None => {
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: "Subflow".to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    match subflow_manager {
+                        Some(manager) => {
+                            manager
+                                .execute_subflow(
+                                    Arc::new(Mutex::new(*subflow.clone())),
+                                    repetitions,
+                                    count_successes,
+                                    false,
+                                )
+                                .await
+                        }
+                        None => None,
+                    };
+
+                    Ok(Some(Value::String(
+                        "Non-blocking SubFlow Started".to_string(),
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn process_link(
+        &mut self,
+        link: &WorkflowLink,
+        context_data: Option<Value>,
+        current_success: &mut bool,
+    ) -> Result<Option<Value>, Box<dyn Error>> {
+        match link.adapter_type {
+            LinkAdapter::Condition => {
+                println!("Processing Condition: {:?}", link.id);
+
+                let condition_found = self
+                    .nibble_context
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.id == *link.adapter_id);
+
+                if let Some(condition) = condition_found {
+                    match condition
+                        .check_condition(&self.nibble_context, context_data.clone())
+                        .await
+                    {
+                        Ok(response) => {
+                            println!("Condition response: {:?}", response);
+
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: link.id.clone(),
+                                element_type: Adapter::Condition.to_string(),
+                                result: Some(Value::String("Condition Success".to_string())),
+                                timestamp: chrono::Utc::now(),
+                            });
+
+                            if let Some(target) = &link.target {
+                                let next_node_id = if response {
+                                    &target.true_target_id
+                                } else {
+                                    &target.false_target_id
+                                };
+
+                                if let Some(node) = self.nodes.get(next_node_id) {
+                                    println!(
+                                        "Continuing to node based on condition: {:?}",
+                                        next_node_id
+                                    );
+                                    let result = self
+                                        .process_node(
+                                            &node.clone(),
+                                            None,
+                                            context_data.clone(),
+                                            current_success,
+                                        )
+                                        .await?;
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Condition.to_string(),
+                                        result: result.clone(),
+                                        timestamp: chrono::Utc::now(),
+                                    });
+
+                                    Ok(result)
+                                } else {
+                                    eprintln!(
+                                        "Target node not found for condition response: {:?}",
+                                        next_node_id
+                                    );
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Condition.to_string(),
+                                        result: None,
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                    Ok(None)
+                                }
+                            } else {
+                                if response {
+                                    println!("Condition passed, continuing flow.");
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Condition.to_string(),
+                                        result: Some(Value::String(
+                                            "Condition Success".to_string(),
+                                        )),
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                    Ok(Some(Value::String("Condition Success".to_string())))
+                                } else {
+                                    println!("Condition failed, stopping flow.");
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Condition.to_string(),
+                                        result: None,
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                    Ok(None)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Condition execution failed: {:?}", e);
+
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: link.id.clone(),
+                                element_type: Adapter::Condition.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    eprintln!("Condition not found for ID: {:?}", link.adapter_id);
+
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: link.id.clone(),
+                        element_type: Adapter::Condition.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+            LinkAdapter::FHEGate => {
+                println!("Processing FHEGate: {:?}", link.id);
+                let fhe_gate_found = self
+                    .nibble_context
+                    .fhe_gates
+                    .iter()
+                    .find(|fhe_gate| fhe_gate.id == *link.adapter_id);
+
+                if let Some(fhe_gate) = fhe_gate_found {
+                    let encrypted_value_option = if let Some(v) = context_data.clone() {
+                        if let Some(s) = v.as_str() {
+                            hex::decode(s).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    match encrypted_value_option {
+                        Some(encrypted_value) => {
+                            if let Some(context) = &link.context {
+                                match fhe_gate
+                                    .check_fhe_gate(
+                                        encrypted_value,
+                                        context
+                                            .get("criterion")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.as_bytes().to_vec()),
+                                        context
+                                            .get("client_key")
+                                            .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                            .unwrap(),
+                                        self.nibble_context.provider.clone(),
+                                        self.nibble_context.owner_wallet.clone(),
+                                    )
+                                    .await
+                                {
+                                    Ok(response) => {
+                                        if let Some(target) = &link.target {
+                                            let next_node_id = if response {
+                                                &target.true_target_id
+                                            } else {
+                                                &target.false_target_id
+                                            };
+
+                                            if let Some(node) = self.nodes.get(next_node_id) {
+                                                println!(
+                                                    "Continuing to node based on FHE gate: {:?}",
+                                                    next_node_id
+                                                );
+                                                let result = self
+                                                    .process_node(
+                                                        &node.clone(),
+                                                        None,
+                                                        context_data.clone(),
+                                                        current_success,
+                                                    )
+                                                    .await?;
+                                                self.execution_history.push(ExecutionHistory {
+                                                    element_id: link.id.clone(),
+                                                    element_type: Adapter::FHEGate.to_string(),
+                                                    result: result.clone(),
+                                                    timestamp: chrono::Utc::now(),
+                                                });
+
+                                                Ok(result)
+                                            } else {
+                                                eprintln!(
+                                    "Target node not found for FHE gate response: {:?}",
+                                    next_node_id
+                                );
+
+                                                self.execution_history.push(ExecutionHistory {
+                                                    element_id: link.id.clone(),
+                                                    element_type: Adapter::FHEGate.to_string(),
+                                                    result: None,
+                                                    timestamp: chrono::Utc::now(),
+                                                });
+                                                Ok(None)
+                                            }
+                                        } else {
+                                            if response {
+                                                println!("FHE gate passed, continuing flow.");
+
+                                                self.execution_history.push(ExecutionHistory {
+                                                    element_id: link.id.clone(),
+                                                    element_type: Adapter::FHEGate.to_string(),
+                                                    result: Some(Value::String(
+                                                        "FHE Gate Success".to_string(),
+                                                    )),
+                                                    timestamp: chrono::Utc::now(),
+                                                });
+                                                Ok(Some(Value::String(
+                                                    "FHE Gate Success".to_string(),
+                                                )))
+                                            } else {
+                                                println!("FHE gate failed, stopping flow.");
+
+                                                self.execution_history.push(ExecutionHistory {
+                                                    element_id: link.id.clone(),
+                                                    element_type: Adapter::FHEGate.to_string(),
+                                                    result: None,
+                                                    timestamp: chrono::Utc::now(),
+                                                });
+                                                Ok(None)
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("FHEGate execution failed: {:?}", e);
+
+                                        self.execution_history.push(ExecutionHistory {
+                                            element_id: link.id.clone(),
+                                            element_type: Adapter::FHEGate.to_string(),
+                                            result: None,
+                                            timestamp: chrono::Utc::now(),
+                                        });
+                                        Ok(None)
+                                    }
+                                }
+                            } else {
+                                self.execution_history.push(ExecutionHistory {
+                                    element_id: link.id.clone(),
+                                    element_type: Adapter::FHEGate.to_string(),
+                                    result: None,
+                                    timestamp: chrono::Utc::now(),
+                                });
+                                Ok(None)
+                            }
+                        }
+
+                        None => {
+                            eprintln!(
+                                "Encrypted value from previous node not found for ID: {:?}",
+                                link.adapter_id
+                            );
+
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: link.id.clone(),
+                                element_type: Adapter::FHEGate.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    eprintln!("FHEGate not found for ID: {:?}", link.adapter_id);
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: link.id.clone(),
+                        element_type: Adapter::FHEGate.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+            LinkAdapter::Evaluation => {
+                println!("Processing Evaluation: {:?}", link.id);
+                let evaluation_found = self
+                    .nibble_context
+                    .evaluations
+                    .iter()
+                    .find(|evaluation| evaluation.id == *link.adapter_id);
+
+                if let Some(evaluation) = evaluation_found {
+                    let interaction_id = link
+                        .context
+                        .as_ref()
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_u64().map(|n| n as u8))
+                                .collect::<Vec<u8>>()
+                        })
+                        .unwrap_or_else(Vec::new);
+
+                    let flow_previous_context = self
+                        .execution_history
+                        .iter()
+                        .map(|entry| {
+                            format!(
+                                "Element ID: {}, Type: {}, Result: {:?}, Timestamp: {}",
+                                hex::encode(&entry.element_id),
+                                entry.element_type,
+                                entry.result.clone().unwrap_or(Value::Null),
+                                entry.timestamp
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let executed_ids: Vec<Vec<u8>> = self
+                        .execution_history
+                        .iter()
+                        .map(|entry| entry.element_id.clone())
+                        .collect();
+
+                    let flow_next_steps = self
+                        .topological_sort()?
+                        .iter()
+                        .filter(|id| !executed_ids.contains(id))
+                        .map(|id| {
+                            if let Some(node) = self.nodes.get(id) {
+                                format!(
+                                    "Node ID: {}, Adapter Type: {:?}",
+                                    hex::encode(&node.id),
+                                    node.adapter_type
+                                )
+                            } else if let Some(link) = self.links.get(id) {
+                                format!(
+                                    "Link ID: {}, Adapter Type: {:?}",
+                                    hex::encode(&link.id),
+                                    link.adapter_type
+                                )
+                            } else {
+                                format!("Unknown element ID: {}", hex::encode(id))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    match evaluation
+                        .check_evaluation(
+                            self.nibble_context.agents.clone(),
+                            Some(&flow_previous_context),
+                            Some(&flow_next_steps),
+                            interaction_id,
+                        )
+                        .await
+                    {
+                        Ok(response) => {
+                            if let Some(target) = &link.target {
+                                let next_node_id = if response {
+                                    &target.true_target_id
+                                } else {
+                                    &target.false_target_id
+                                };
+
+                                if let Some(node) = self.nodes.get(next_node_id) {
+                                    println!(
+                                        "Continuing to node based on Evaluation: {:?}",
+                                        next_node_id
+                                    );
+                                    let result = self
+                                        .process_node(
+                                            &node.clone(),
+                                            None,
+                                            context_data.clone(),
+                                            current_success,
+                                        )
+                                        .await?;
+
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Evaluation.to_string(),
+                                        result: result.clone(),
+                                        timestamp: chrono::Utc::now(),
+                                    });
+
+                                    Ok(result)
+                                } else {
+                                    eprintln!(
+                                        "Target node not found for Evaluation response: {:?}",
+                                        next_node_id
+                                    );
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Evaluation.to_string(),
+                                        result: None,
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                    Ok(None)
+                                }
+                            } else {
+                                if response {
+                                    println!("Evaluation passed, continuing flow.");
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Evaluation.to_string(),
+                                        result: context_data.clone(),
+                                        timestamp: chrono::Utc::now(),
+                                    });
+
+                                    Ok(context_data)
+                                } else {
+                                    println!("Evaluation failed, stopping flow.");
+                                    self.execution_history.push(ExecutionHistory {
+                                        element_id: link.id.clone(),
+                                        element_type: Adapter::Evaluation.to_string(),
+                                        result: None,
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                    Ok(None)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Evaluation execution failed: {:?}", e);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: link.id.clone(),
+                                element_type: Adapter::Evaluation.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    eprintln!("Evaluation not found for ID: {:?}", link.adapter_id);
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: link.id.clone(),
+                        element_type: Adapter::Evaluation.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    Ok(None)
+                }
+            }
+        }
     }
 }
 

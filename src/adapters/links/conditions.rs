@@ -23,12 +23,7 @@ pub enum ConditionType {
     OffChain {
         api_url: String,
     },
-    InternalState {
-        field_name: String,
-    },
-    ContextBased {
-        key: String,
-    },
+    ContextBased,
     TimeBased {
         comparison_time: chrono::NaiveTime,
         comparison_type: TimeComparisonType,
@@ -125,14 +120,9 @@ impl Condition {
                 sub_map.insert("api_url".to_string(), Value::String(api_url.clone()));
                 Value::Object(sub_map)
             }
-            ConditionType::InternalState { field_name } => {
-                let mut sub_map = Map::new();
-                sub_map.insert("field_name".to_string(), Value::String(field_name.clone()));
-                Value::Object(sub_map)
-            }
-            ConditionType::ContextBased { key } => {
-                let mut sub_map = Map::new();
-                sub_map.insert("key".to_string(), Value::String(key.clone()));
+            ConditionType::ContextBased {} => {
+                let sub_map = Map::new();
+
                 Value::Object(sub_map)
             }
             ConditionType::TimeBased {
@@ -162,6 +152,7 @@ impl Condition {
     pub async fn check_condition(
         &self,
         nibble_context: &Nibble,
+        previous_node_result: Option<Value>,
     ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         match &self.condition_type {
             ConditionType::OnChain {
@@ -192,20 +183,16 @@ impl Condition {
                 let is_valid = (self.check.condition_fn)(json);
                 Ok(is_valid)
             }
-            ConditionType::InternalState { field_name } => {
-                return Err(format!(
-                    "InternalState condition with field '{}' is not implemented.",
-                    field_name
+            ConditionType::ContextBased {} => match previous_node_result {
+                Some(context) => {
+                    let is_valid = (self.check.condition_fn)(context);
+                    Ok(is_valid)
+                }
+                None => Err(format!(
+                    "No context provided from the previous node to evalute condition."
                 )
-                .into());
-            }
-            ConditionType::ContextBased { key } => {
-                return Err(format!(
-                    "ContextBased condition with key '{}' is not implemented.",
-                    key
-                )
-                .into());
-            }
+                .into()),
+            },
             ConditionType::TimeBased {
                 comparison_time,
                 comparison_type,

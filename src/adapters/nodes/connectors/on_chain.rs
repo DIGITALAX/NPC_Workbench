@@ -188,11 +188,8 @@ impl OnChainConnector {
         &self,
         provider: Provider<Http>,
         wallet: LocalWallet,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let client = SignerMiddleware::new(
-            provider.clone(),
-            wallet.clone(),
-        );
+    ) -> Result<Option<TransactionReceipt>, Box<dyn Error + Send + Sync>> {
+        let client = SignerMiddleware::new(provider.clone(), wallet.clone());
         let client = Arc::new(client);
 
         for tx in &self.transactions {
@@ -222,6 +219,7 @@ impl OnChainConnector {
             match receipt {
                 Some(r) if r.status == Some(U64::from(1)) => {
                     println!("Transaction succeeded with hash: {:?}", r.transaction_hash);
+                    return Ok(Some(r));
                 }
                 Some(r) => {
                     println!(
@@ -233,7 +231,8 @@ impl OnChainConnector {
                 None => return Err("Transaction was not mined".into()),
             }
         }
-        Ok(())
+
+        Ok(None)
     }
 }
 

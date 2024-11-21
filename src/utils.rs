@@ -17,7 +17,7 @@ use crate::{
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     encrypt::decrypt_with_private_key,
     nibble::ContractInfo,
-    workflow::{ExecutionHistory, LinkAdapter, NodeAdapter, WorkflowLink, WorkflowNode},
+    workflow::{ExecutionHistory, LinkAdapter, LinkTarget, NodeAdapter, WorkflowLink, WorkflowNode},
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -546,20 +546,8 @@ async fn build_conditions(
                         .unwrap_or("")
                         .to_string(),
                 },
-                "InternalState" => ConditionType::InternalState {
-                    field_name: metadata
-                        .get("field_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                },
-                "ContextBased" => ConditionType::ContextBased {
-                    key: metadata
-                        .get("key")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                },
+
+                "ContextBased" => ConditionType::ContextBased {},
                 "TimeBased" => ConditionType::TimeBased {
                     comparison_time: metadata
                         .get("comparison_time")
@@ -1308,6 +1296,16 @@ fn build_links(
             let context = link_data
                 .get("context")
                 .and_then(|val| Value::try_from(val.clone()).ok());
+
+            let target = link_data
+                .get("target")
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .map(|decoded| LinkTarget {
+                    true_target_id: decoded.clone(),
+                    false_target_id: decoded,
+                });
+
             links.insert(
                 id.clone(),
                 WorkflowLink {
@@ -1316,6 +1314,7 @@ fn build_links(
                     adapter_type,
                     repetitions,
                     context,
+                    target,
                 },
             );
         }
