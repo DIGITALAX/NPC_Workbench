@@ -17,10 +17,7 @@ use std::{
     collections::HashMap, error::Error, fmt::Debug, fs::File, io::Read, marker::Send, path::Path,
     result::Result, str::FromStr, sync::Arc,
 };
-use tokio::sync::{
-    mpsc::{self},
-    oneshot, Mutex,
-};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct ExecutionHistory {
@@ -361,7 +358,7 @@ impl Workflow {
         &mut self,
         repetitions: Option<u32>,
         count_successes: bool,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<Vec<ExecutionHistory>, Box<dyn Error>> {
         let mut successful_repeats = 0;
         let mut total_repeats = 0;
 
@@ -416,7 +413,7 @@ impl Workflow {
             "Workflow execution complete. Total: {}, Successful: {}",
             total_repeats, successful_repeats
         );
-        Ok(())
+        Ok(self.execution_history.clone())
     }
 
     async fn build_workflow(
@@ -851,6 +848,7 @@ impl Workflow {
                                     repetitions,
                                     count_successes,
                                     true,
+                                    None,
                                 )
                                 .await;
 
@@ -860,13 +858,14 @@ impl Workflow {
                     };
 
                     match result {
-                        Some(Ok(_)) => {
+                        Some(Ok(history)) => {
                             self.execution_history.push(ExecutionHistory {
                                 element_id: node.id.clone(),
                                 element_type: "Subflow".to_string(),
                                 result: Some(Value::String("Blocking SubFlow Success".to_string())),
                                 timestamp: chrono::Utc::now(),
                             });
+                            self.execution_history.extend(history);
                             Ok(Some(Value::String("Blocking SubFlow Success".to_string())))
                         }
                         Some(Err(e)) => {
@@ -892,18 +891,58 @@ impl Workflow {
                 } else {
                     match subflow_manager {
                         Some(manager) => {
+                            let (report_sender, mut report_receiver) = mpsc::channel(100);
+
                             manager
                                 .execute_subflow(
                                     Arc::new(Mutex::new(*subflow.clone())),
                                     repetitions,
                                     count_successes,
                                     false,
+                                    Some(report_sender),
                                 )
-                                .await
-                        }
-                        None => None,
-                    };
+                                .await;
 
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            tokio::spawn(async move {
+                                while let Some(history) = report_receiver.recv().await {
+                                    let _ = tx.send(history);
+                                    break;
+                                }
+                            });
+
+                            if let Ok(history) = rx.await {
+                                self.execution_history.push(ExecutionHistory {
+                                    element_id: node.id.clone(),
+                                    element_type: "Subflow".to_string(),
+                                    result: Some(Value::String(
+                                        "Blocking SubFlow Success".to_string(),
+                                    )),
+                                    timestamp: chrono::Utc::now(),
+                                });
+                                self.execution_history.extend(history);
+                            } else {
+                                self.execution_history.push(ExecutionHistory {
+                                    element_id: node.id.clone(),
+                                    element_type: "Subflow".to_string(),
+                                    result: None,
+                                    timestamp: chrono::Utc::now(),
+                                });
+                                eprintln!("Failed to receive history from non-blocking SubFlow.");
+                                return Ok(None);
+                            }
+                        }
+                        None => {
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: node.id.clone(),
+                                element_type: "Subflow".to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                            });
+                            eprintln!("No SubflowManager available.");
+                            return Ok(None);
+                        }
+                    }
                     Ok(Some(Value::String(
                         "Non-blocking SubFlow Started".to_string(),
                     )))
@@ -1366,7 +1405,8 @@ pub struct SubflowRequest {
     repetitions: Option<u32>,
     count_successes: bool,
     blocking: bool,
-    responder: Option<oneshot::Sender<Result<(), String>>>,
+    responder: Option<oneshot::Sender<Result<Vec<ExecutionHistory>, String>>>,
+    report_sender: Option<mpsc::Sender<Vec<ExecutionHistory>>>,
 }
 
 impl SubflowManager {
@@ -1381,23 +1421,40 @@ impl SubflowManager {
                     count_successes,
                     blocking,
                     responder,
+                    report_sender,
                 } = request;
 
                 if blocking {
                     let result = {
                         let mut subflow = subflow.lock().await;
-                        subflow.execute(repetitions, count_successes).await
+                        subflow
+                            .execute(repetitions, count_successes)
+                            .await
+                            .map_err(|e| e.to_string())
                     };
                     if let Some(responder) = responder {
-                        let _ = responder.send(result.map_err(|e| e.to_string()));
+                        let _ = responder.send(result);
                     }
                 } else {
-                    let subflow = subflow.clone();
+                    let subflow_clone = subflow.clone();
                     tokio::spawn(async move {
-                        let _ = {
-                            let mut subflow = subflow.lock().await;
-                            subflow.execute(repetitions, count_successes).await
+                        let result = {
+                            let mut subflow = subflow_clone.lock().await;
+                            subflow
+                                .execute(repetitions, count_successes)
+                                .await
+                                .map_err(|e| e.to_string())
                         };
+
+                        if let Ok(history) = result {
+                            if let Some(sender) = report_sender {
+                                if sender.send(history).await.is_err() {
+                                    eprintln!("Error sending execution history from non-blocking subflow.");
+                                }
+                            }
+                        } else {
+                            eprintln!("Non-blocking subflow execution failed.");
+                        }
                     });
                 }
             }
@@ -1412,7 +1469,8 @@ impl SubflowManager {
         repetitions: Option<u32>,
         count_successes: bool,
         blocking: bool,
-    ) -> Option<Result<(), String>> {
+        report_sender: Option<mpsc::Sender<Vec<ExecutionHistory>>>,
+    ) -> Option<Result<Vec<ExecutionHistory>, String>> {
         if blocking {
             let (responder, receiver) = oneshot::channel();
             let _ = self
@@ -1423,6 +1481,7 @@ impl SubflowManager {
                     count_successes,
                     blocking,
                     responder: Some(responder),
+                    report_sender,
                 })
                 .await;
 
@@ -1436,6 +1495,7 @@ impl SubflowManager {
                     count_successes,
                     blocking,
                     responder: None,
+                    report_sender,
                 })
                 .await;
 
