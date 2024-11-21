@@ -30,7 +30,7 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc, vec};
-use tokio::sync::Mutex;
+
 
 pub struct AdapterHandle<'a, T>
 where
@@ -890,7 +890,7 @@ impl Nibble {
             links: HashMap::new(),
             nibble_context: Arc::new(self.clone()),
             encrypted,
-            execution_history: Arc::new(Mutex::new(Vec::new())),
+            execution_history: Vec::new(),
         }
     }
 
@@ -916,7 +916,7 @@ impl Nibble {
             links: workflow.links,
             nibble_context: Arc::new(self.clone()),
             encrypted: workflow.encrypted,
-            execution_history: Arc::new(Mutex::new(workflow.execution_history)),
+            execution_history: workflow.execution_history,
         })
     }
 
