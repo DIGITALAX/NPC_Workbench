@@ -332,9 +332,19 @@ impl Nibble {
         name: &str,
         key: &str,
         encrypted: bool,
+        contract_address: &H160,
+        operation: &str,
+        chain: Chain
     ) -> Result<AdapterHandle<'_, FHEGate>, Box<dyn Error + Send + Sync>> {
-        let fhe_gate: FHEGate =
-            configure_new_gate(name, key, encrypted, &self.owner_wallet.address())?;
+        let fhe_gate: FHEGate = configure_new_gate(
+            name,
+            key,
+            encrypted,
+            &self.owner_wallet.address(),
+            contract_address,
+            operation,
+            chain
+        )?;
         self.fhe_gates.push(fhe_gate.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -905,7 +915,7 @@ impl Nibble {
             links: workflow.links,
             nibble_context: Arc::new(self.clone()),
             encrypted: workflow.encrypted,
-            execution_history: workflow.execution_history
+            execution_history: workflow.execution_history,
         })
     }
 
@@ -1147,7 +1157,11 @@ where
 
         let serialized_adapter = serde_json::to_vec(&self.adapter)?;
 
-        let contract_instance = Contract::new(contract_address, Abi::default(), client.clone());
+        let mut abi_file = File::open(Path::new("./abis/NibbleStorage.json"))?;
+        let mut abi_content = String::new();
+        abi_file.read_to_string(&mut abi_content)?;
+        let abi = serde_json::from_str::<Abi>(&abi_content)?;
+        let contract_instance = Contract::new(contract_address, abi, client.clone());
 
         let method_name = match self.adapter_type {
             Adapter::Condition => "addOrModifyConditionsBatch",
@@ -1373,7 +1387,12 @@ where
             }
         };
 
-        let contract_instance = Contract::new(contract_address, Abi::default(), client.clone());
+        let mut abi_file = File::open(Path::new("./abis/NibbleStorage.json"))?;
+        let mut abi_content = String::new();
+        abi_file.read_to_string(&mut abi_content)?;
+        let abi = serde_json::from_str::<Abi>(&abi_content)?;
+
+        let contract_instance = Contract::new(contract_address, abi, client.clone());
 
         let method_name = match self.adapter_type {
             Adapter::Condition => "removeListenersBatch",

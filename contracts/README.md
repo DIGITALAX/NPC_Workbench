@@ -1,1 +1,1 @@
-Agent Meme Contract Factory
+Contract Factory

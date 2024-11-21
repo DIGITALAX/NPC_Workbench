@@ -930,11 +930,42 @@ async fn build_fhe_gates(
                 .unwrap_or("")
                 .to_string();
 
+            let contract_address = fhe_gate_data
+                .get("contract_address")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    if arr.len() == 20 {
+                        Some(H160::from_slice(
+                            &arr.iter()
+                                .filter_map(|v| v.as_u64().map(|x| x as u8))
+                                .collect::<Vec<_>>(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .ok_or("Invalid or missing contract address")?;
+
+            let operation = fhe_gate_data
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unnamed Operation")
+                .to_string();
+
+            let chain = fhe_gate_data
+                .get("chain")
+                .and_then(|s| s.as_str())
+                .and_then(|s| s.parse::<Chain>().ok())
+                .unwrap_or(Chain::Mainnet);
+
             fhe_gates.push(FHEGate {
                 name,
                 id,
                 key,
                 encrypted,
+                contract_address,
+                operation,
+                chain,
             });
         }
     }
