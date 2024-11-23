@@ -5,6 +5,7 @@ use crate::{
 use ethers::{abi::Address, types::H160};
 use serde_json::{Map, Value};
 use std::error::Error;
+
 #[derive(Debug, Clone)]
 pub struct Condition {
     pub name: String,

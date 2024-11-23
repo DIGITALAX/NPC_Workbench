@@ -31,7 +31,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, error::Error, fs::File, io::Read, path::Path, sync::Arc, vec};
 
-
 pub struct AdapterHandle<'a, T>
 where
     T: Adaptable,
@@ -101,6 +100,7 @@ pub struct Nibble {
     pub chain: Chain,
     pub ipfs_client: Arc<dyn IPFSClient + Send + Sync>,
     pub graph_api_key: Option<String>,
+    pub debug: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -255,6 +255,7 @@ impl Nibble {
         ipfs_config: HashMap<String, String>,
         chain: Chain,
         graph_api_key: Option<String>,
+        debug: Option<bool>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(Self {
             agents: vec![],
@@ -279,6 +280,10 @@ impl Nibble {
             chain,
             graph_api_key,
             ipfs_client: IPFSClientFactory::create_client(ipfs_provider, ipfs_config)?,
+            debug: match debug {
+                Some(debug) => debug,
+                None => false,
+            },
         })
     }
 
@@ -596,6 +601,7 @@ impl Nibble {
                             saved_agents: vec![],
                             ipfs_client: self.ipfs_client.clone(),
                             graph_api_key: self.graph_api_key.clone(),
+                            debug: self.debug,
                         })
                     } else {
                         Err("No transaction logs received.".into())
@@ -634,6 +640,7 @@ impl Nibble {
         self.saved_agents = response.agents;
         self.saved_fhe_gates = response.fhe_gates;
         self.count = response.count;
+        self.debug = response.debug;
 
         Ok(Nibble {
             fhe_gates: vec![],
@@ -658,6 +665,7 @@ impl Nibble {
             chain: self.chain.clone(),
             ipfs_client: self.ipfs_client.clone(),
             graph_api_key: self.graph_api_key.clone(),
+            debug: self.debug,
         })
     }
 

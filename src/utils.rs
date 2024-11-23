@@ -17,10 +17,11 @@ use crate::{
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     encrypt::decrypt_with_private_key,
     nibble::ContractInfo,
-    workflow::{ExecutionHistory, LinkAdapter, LinkTarget, NodeAdapter, WorkflowLink, WorkflowNode},
+    workflow::{
+        ExecutionHistory, LinkAdapter, LinkTarget, NodeAdapter, WorkflowLink, WorkflowNode,
+    },
 };
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{DateTime, Utc};
 use ethers::{
     abi::Token,
@@ -57,6 +58,7 @@ pub struct GraphNibbleResponse {
     pub offchain_connectors: Vec<OffChainConnector>,
     pub contracts: Vec<ContractInfo>,
     pub count: U256,
+    pub debug: bool,
 }
 
 pub fn convert_value_to_token(value: &Value) -> Result<Token, Box<dyn Error + Send + Sync>> {
@@ -242,6 +244,10 @@ pub async fn load_nibble_from_subgraph(
                     .and_then(|v| v.as_str())
                     .ok_or("Missing count")?
                     .parse::<U256>()?,
+                debug: object
+                    .get("debug")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             });
         } else {
             return Err("No data returned from Graph query".into());
@@ -389,8 +395,8 @@ fn parse_llm_model(metadata: &Value) -> Result<LLMModel, Box<dyn Error + Send + 
                 .get("temperature")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.7) as f32,
-            max_tokens: metadata
-                .get("max_tokens")
+            max_completion_tokens: metadata
+                .get("max_completion_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1000) as u32,
             top_p: metadata
@@ -407,6 +413,36 @@ fn parse_llm_model(metadata: &Value) -> Result<LLMModel, Box<dyn Error + Send + 
                 .unwrap_or(0.0) as f32,
             system_prompt: metadata
                 .get("system_prompt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            store: metadata.get("store").and_then(|v| v.as_bool()),
+            metadata: metadata.get("metadata").cloned(),
+            logit_bias: metadata.get("logit_bias").cloned(),
+            logprobs: metadata.get("logprobs").and_then(|v| v.as_bool()),
+            top_logprobs: metadata
+                .get("top_logprobs")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            modalities: metadata
+                .get("modalities")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.as_str().map(|s| s.to_string()))
+                        .collect()
+                }),
+            stop: metadata.get("stop").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                    .collect()
+            }),
+            response_format: metadata.get("response_format").cloned(),
+            stream: metadata.get("stream").and_then(|v| v.as_bool()),
+            parallel_tool_calls: metadata
+                .get("parallel_tool_calls")
+                .and_then(|v| v.as_bool()),
+            user: metadata
+                .get("user")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         }),
@@ -441,13 +477,31 @@ fn parse_llm_model(metadata: &Value) -> Result<LLMModel, Box<dyn Error + Send + 
                 .get("system_prompt")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
-        }),
-        "Ollama" => Ok(LLMModel::Ollama {
-            api_key: metadata
-                .get("api_key")
+            version: metadata
+                .get("version")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
+            stop_sequences: metadata
+                .get("stop_sequences")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                        .collect()
+                }),
+            stream: metadata
+                .get("stream")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            metadata: metadata.get("metadata").cloned(),
+            tool_choice: metadata.get("tool_choice").cloned(),
+            tools: metadata
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().cloned().collect()),
+        }),
+        "Ollama" => Ok(LLMModel::Ollama {
             model: metadata
                 .get("model")
                 .and_then(|v| v.as_str())
@@ -473,7 +527,47 @@ fn parse_llm_model(metadata: &Value) -> Result<LLMModel, Box<dyn Error + Send + 
                 .get("presence_penalty")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0) as f32,
+            format: metadata
+                .get("format")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            suffix: metadata
+                .get("suffix")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            system: metadata
+                .get("system")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            template: metadata
+                .get("template")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            context: metadata
+                .get("context")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_u64().map(|n| n as u32))
+                        .collect()
+                }),
+            stream: metadata.get("stream").and_then(|v| v.as_bool()),
+            raw: metadata.get("raw").and_then(|v| v.as_bool()),
+            keep_alive: metadata
+                .get("keep_alive")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            options: metadata.get("options").cloned(),
+            images: metadata
+                .get("images")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|img| img.as_str().map(|s| s.to_string()))
+                        .collect()
+                }),
         }),
+
         _ => Ok(LLMModel::Other {
             config: metadata
                 .as_object()

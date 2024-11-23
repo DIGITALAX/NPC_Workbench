@@ -34,6 +34,7 @@ mod tests {
             ipfs_config,
             chain,
             graph_api_key,
+            None,
         );
 
         match new_nibble {
@@ -50,11 +51,22 @@ mod tests {
                             api_key: "your-openai-api-key".to_string(),
                             model: "gpt-4".to_string(),
                             temperature: 0.7,
-                            max_tokens: 200,
+                            max_completion_tokens: 200,
                             top_p: 0.9,
                             frequency_penalty: 0.1,
                             presence_penalty: 0.2,
                             system_prompt: Some("You are a master meme creator focusing on humor and cultural trends.".to_string()),
+                            store: None,
+                            metadata: None,
+                            logit_bias: None,
+                            logprobs: None,
+                            top_logprobs:None,
+                            modalities:None,
+                            stop: None,
+                            response_format: None,
+                            stream: None,
+                            parallel_tool_calls: None,
+                            user: None,
                         },
                         false,
                         false,
@@ -79,6 +91,13 @@ mod tests {
                             top_k: Some(40),
                             top_p: 0.8,
                             system_prompt: Some("You are an analytical agent specializing in social media metrics and trend prediction.".to_string()),
+                            version:      "2023-06-01".to_string(),
+                            stop_sequences: None,
+                            stream: false,
+                            metadata: None,
+                            tool_choice: None,
+                            tools: None,
+                       
                         },
                         false,
                         true,       false, Some(Box::leak(Box::new(H160::from_str("0x0000000000000000000000000000000000000002").unwrap())))
@@ -91,13 +110,22 @@ mod tests {
                         "Friendly and approachable, fostering community growth.",
                         "Engage with the community by responding to comments, initiating discussions, and encouraging token adoption.",
                         LLMModel::Ollama {
-                            api_key: "your-ollama-api-key".to_string(),
-                            model: "ollama-chat".to_string(),
+                            model: "llama3.1:8b".to_string(),
                             temperature: 0.8,
                             max_tokens: 250,
                             top_p: 0.85,
                             frequency_penalty: 0.1,
                             presence_penalty: 0.3,
+                            format: None,
+                            suffix: None,
+                            system: None,
+                            template: None,
+                            context: None,
+                            stream: None,
+                            raw: None,
+                            keep_alive: None,
+                            options: None,
+                            images: None
                         },
                         true,
                         false,      false, None,None,None, vec![]
@@ -140,7 +168,7 @@ mod tests {
 
                             if name == "CommunityBuilder" {
                                 agent.adapter.add_objective(
-                                    "Collaborate with influencers",
+                                    "Collaborate with accounts on Lens that sell and create art NFTs that can be bought on Lens. Like and comment and repost these publications.",
                                     7,
                                     false,
                                 );
@@ -162,7 +190,7 @@ mod tests {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Error al crear agente: {:?}", e);
+                            eprintln!("Error creating the agent: {:?}", e);
                             panic!("Test failed due a critical error during agent creation.");
                         }
                     }
@@ -196,18 +224,12 @@ mod tests {
                         panic!("Test failed due to listener creation error.");
                     }
                 }
-
-
             }
             Err(e) => {
                 eprintln!("Error al crear objeto: {:?}", e);
                 panic!("Test failed due a critical error during Nibble creation.");
             }
         }
-
-
-
-
     }
 }
 
@@ -215,21 +237,9 @@ mod tests {
 
 [x] Create agents with objectives and personalities
 [] Create listeners and links to post and interact continuously on-chain
-[] añade las puertas
+[] subflujo de publicar
+[] subflujo de balancer
+[] subflujo de desplegar el token
+[] alamcenar la información en cadena con el graph
 
-1. Network Agents
-Define distinct agents with specific personalities and roles.
-Link these agents to their social media accounts via Lens Protocol and Farcaster.
-Each agent focuses on a particular aspect of the lore aligned with their personality and specific objectives.
-These agents operate continuously on the server, posting periodically according to their timers, while also interacting and responding to other accounts on social media based on predefined rules.
-2. Token Deployment
-When certain conditions are met, a process is triggered to deploy the meme token on-chain, using characteristics predefined by the user or specified by an agent (such as name, symbol, maximum supply, monthly distribution caps, or weekly distribution goals).
-3. Infrastructure Creation for the Token
-An initial token supply is minted to establish liquidity pools on Uniswap and Balancer.
-4. Agents Receive Token Information
-Network agents are updated with details about the token, its official liquidity pools, and other relevant information. This is added to their system prompt, enabling them to:
-Post about the token.
-Begin their second task, which involves distributing the token, conducting airdrops, and carrying out related activities according to their roles and the conditions governing these actions.
-5. Expanding Agent Capabilities
-Agents can later trigger additional workflows, such as initiating airdrops or distributing tokens as commissions for developers and artists. This feature can be developed in subsequent phases. Engage in trading strategies to build out the meme coin treasury.
 */

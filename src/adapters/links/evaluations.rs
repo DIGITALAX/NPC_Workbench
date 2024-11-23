@@ -1,5 +1,4 @@
 use std::{collections::HashMap, error::Error, fmt};
-
 use crate::{
     adapters::nodes::agents::{call_llm_api, Agent, LLMModel},
     nibble::Adaptable,

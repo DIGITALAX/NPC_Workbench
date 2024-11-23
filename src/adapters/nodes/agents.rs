@@ -2,7 +2,7 @@ use crate::{nibble::Adaptable, utils::generate_unique_id};
 use ethers::{core::rand::thread_rng, prelude::*};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde_json::{Map, Value};
+use serde_json::{from_str, json, Map, Value};
 use std::{collections, error::Error, iter::Iterator, str::FromStr};
 
 #[derive(Debug, Clone)]
@@ -11,11 +11,22 @@ pub enum LLMModel {
         api_key: String,
         model: String,
         temperature: f32,
-        max_tokens: u32,
+        max_completion_tokens: u32,
         top_p: f32,
         frequency_penalty: f32,
         presence_penalty: f32,
         system_prompt: Option<String>,
+        store: Option<bool>,
+        metadata: Option<Value>,
+        logit_bias: Option<Value>,
+        logprobs: Option<bool>,
+        top_logprobs: Option<u32>,
+        modalities: Option<Vec<String>>,
+        stop: Option<Vec<String>>,
+        response_format: Option<Value>,
+        stream: Option<bool>,
+        parallel_tool_calls: Option<bool>,
+        user: Option<String>,
     },
     Claude {
         api_key: String,
@@ -25,15 +36,30 @@ pub enum LLMModel {
         top_k: Option<u32>,
         top_p: f32,
         system_prompt: Option<String>,
+        version: String,
+        stop_sequences: Option<Vec<String>>,
+        stream: bool,
+        metadata: Option<Value>,
+        tool_choice: Option<Value>,
+        tools: Option<Vec<Value>>,
     },
     Ollama {
-        api_key: String,
         model: String,
         temperature: f32,
         max_tokens: u32,
         top_p: f32,
         frequency_penalty: f32,
         presence_penalty: f32,
+        format: Option<String>,
+        suffix: Option<String>,
+        system: Option<String>,
+        template: Option<String>,
+        context: Option<Vec<u32>>,
+        stream: Option<bool>,
+        raw: Option<bool>,
+        keep_alive: Option<String>,
+        options: Option<serde_json::Value>,
+        images: Option<Vec<String>>,
     },
     Other {
         config: collections::HashMap<String, String>,
@@ -149,11 +175,22 @@ impl LLMModel {
                 api_key,
                 model,
                 temperature,
-                max_tokens,
+                max_completion_tokens,
                 top_p,
                 frequency_penalty,
                 presence_penalty,
                 system_prompt,
+                store,
+                metadata,
+                logit_bias,
+                logprobs,
+                top_logprobs,
+                modalities,
+                stop,
+                response_format,
+                stream,
+                parallel_tool_calls,
+                user,
             } => {
                 let mut map = Map::new();
                 map.insert("type".to_string(), Value::String("OpenAI".to_string()));
@@ -164,8 +201,8 @@ impl LLMModel {
                     Value::String(temperature.to_string()),
                 );
                 map.insert(
-                    "max_tokens".to_string(),
-                    Value::Number((*max_tokens).into()),
+                    "max_completion_tokens".to_string(),
+                    Value::Number((*max_completion_tokens).into()),
                 );
                 map.insert("top_p".to_string(), Value::String(top_p.to_string()));
                 map.insert(
@@ -176,6 +213,53 @@ impl LLMModel {
                     "presence_penalty".to_string(),
                     Value::String(presence_penalty.to_string()),
                 );
+                map.insert("store".to_string(), Value::Bool(store.unwrap_or(false)));
+                if let Some(meta) = metadata {
+                    map.insert("metadata".to_string(), meta.clone());
+                }
+                if let Some(logit_bias) = logit_bias {
+                    map.insert("logit_bias".to_string(), logit_bias.clone());
+                }
+                if let Some(logprobs) = logprobs {
+                    map.insert("logprobs".to_string(), Value::Bool(*logprobs));
+                }
+                if let Some(top_logprobs) = top_logprobs {
+                    map.insert(
+                        "top_logprobs".to_string(),
+                        Value::Number((*top_logprobs).into()),
+                    );
+                }
+                if let Some(modalities) = modalities {
+                    map.insert(
+                        "modalities".to_string(),
+                        Value::Array(
+                            modalities
+                                .iter()
+                                .map(|m| Value::String(m.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
+                if let Some(stop) = stop {
+                    map.insert(
+                        "stop".to_string(),
+                        Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()),
+                    );
+                }
+                if let Some(response_format) = response_format {
+                    map.insert("response_format".to_string(), response_format.clone());
+                }
+                map.insert("stream".to_string(), Value::Bool(stream.unwrap_or(false)));
+                if let Some(parallel_tool_calls) = parallel_tool_calls {
+                    map.insert(
+                        "parallel_tool_calls".to_string(),
+                        Value::Bool(*parallel_tool_calls),
+                    );
+                }
+                if let Some(user) = user {
+                    map.insert("user".to_string(), Value::String(user.clone()));
+                }
+
                 if let Some(prompt) = system_prompt {
                     map.insert("system_prompt".to_string(), Value::String(prompt.clone()));
                 }
@@ -189,10 +273,17 @@ impl LLMModel {
                 top_k,
                 top_p,
                 system_prompt,
+                version,
+                stop_sequences,
+                stream,
+                metadata,
+                tool_choice,
+                tools,
             } => {
                 let mut map = Map::new();
                 map.insert("type".to_string(), Value::String("Claude".to_string()));
                 map.insert("api_key".to_string(), Value::String(api_key.clone()));
+                map.insert("version".to_string(), Value::String(version.clone()));
                 map.insert("model".to_string(), Value::String(model.clone()));
                 map.insert(
                     "temperature".to_string(),
@@ -209,20 +300,47 @@ impl LLMModel {
                 if let Some(prompt) = system_prompt {
                     map.insert("system_prompt".to_string(), Value::String(prompt.clone()));
                 }
+                if let Some(sequences) = stop_sequences {
+                    map.insert(
+                        "stop_sequences".to_string(),
+                        Value::Array(sequences.iter().map(|s| Value::String(s.clone())).collect()),
+                    );
+                }
+                map.insert("stream".to_string(), Value::Bool(*stream));
+                if let Some(meta) = metadata {
+                    map.insert("metadata".to_string(), meta.clone());
+                }
+                if let Some(tool_choice) = tool_choice {
+                    map.insert("tool_choice".to_string(), tool_choice.clone());
+                }
+                if let Some(tools) = tools {
+                    map.insert(
+                        "tools".to_string(),
+                        Value::Array(tools.iter().map(|t| t.clone()).collect()),
+                    );
+                }
                 Value::Object(map)
             }
             LLMModel::Ollama {
-                api_key,
                 model,
                 temperature,
                 max_tokens,
                 top_p,
                 frequency_penalty,
                 presence_penalty,
+                format,
+                suffix,
+                system,
+                template,
+                context,
+                stream,
+                raw,
+                keep_alive,
+                options,
+                images,
             } => {
                 let mut map = Map::new();
                 map.insert("type".to_string(), Value::String("Ollama".to_string()));
-                map.insert("api_key".to_string(), Value::String(api_key.clone()));
                 map.insert("model".to_string(), Value::String(model.clone()));
                 map.insert(
                     "temperature".to_string(),
@@ -241,6 +359,49 @@ impl LLMModel {
                     "presence_penalty".to_string(),
                     Value::String(presence_penalty.to_string()),
                 );
+
+                if let Some(format) = format {
+                    map.insert("format".to_string(), Value::String(format.clone()));
+                }
+                if let Some(suffix) = suffix {
+                    map.insert("suffix".to_string(), Value::String(suffix.clone()));
+                }
+                if let Some(system) = system {
+                    map.insert("system".to_string(), Value::String(system.clone()));
+                }
+                if let Some(template) = template {
+                    map.insert("template".to_string(), Value::String(template.clone()));
+                }
+                if let Some(context) = context {
+                    map.insert(
+                        "context".to_string(),
+                        Value::Array(
+                            context
+                                .iter()
+                                .map(|&num| Value::Number(serde_json::Number::from(num)))
+                                .collect(),
+                        ),
+                    );
+                }
+                map.insert("stream".to_string(), Value::Bool(stream.unwrap_or(false)));
+                map.insert("raw".to_string(), Value::Bool(raw.unwrap_or(false)));
+                if let Some(keep_alive) = keep_alive {
+                    map.insert("keep_alive".to_string(), Value::String(keep_alive.clone()));
+                }
+                if let Some(options) = options {
+                    map.insert("options".to_string(), options.clone());
+                }
+                if let Some(images) = images {
+                    map.insert(
+                        "images".to_string(),
+                        Value::Array(
+                            images
+                                .iter()
+                                .map(|img| Value::String(img.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
                 Value::Object(map)
             }
             LLMModel::Other { config } => {
@@ -313,11 +474,37 @@ impl Agent {
 
         let generated_objective = self.execute_agent(&prompt).await?;
 
-        let re = Regex::new(r"Objective:\s*(.+),\s*Priority:\s*(\d+)")?;
+        let re = Regex::new(
+            r"(?i)(objective|goal|task|focus|priority):?\s*(?P<description>.+?)\s*(,|;|:|\.)?\s*(priority|rank|importance):?\s*(?P<priority>\d+)",
+        )?;
+        let mut found_match = false;
+
         for cap in re.captures_iter(&generated_objective) {
-            let description = cap[1].trim().to_string();
-            let priority: u8 = cap[2].parse().unwrap_or(1);
-            self.add_objective(&description, priority, true);
+            if let (Some(description), Some(priority_str)) =
+                (cap.name("description"), cap.name("priority"))
+            {
+                let description = description.as_str().trim().to_string();
+                let priority: u8 = priority_str.as_str().parse().unwrap_or(1);
+                self.add_objective(&description, priority, true);
+                found_match = true;
+            } else {
+                eprintln!("Could not parse objective: {:?}", cap);
+            }
+        }
+
+        if !found_match {
+            eprintln!("Regex did not match. Applying fallback strategy.");
+            for line in generated_objective.lines() {
+                if let Some(priority_match) = Regex::new(r"(?P<priority>\d+)").unwrap().find(line) {
+                    let priority: u8 = priority_match.as_str().parse().unwrap_or(1);
+                    let description = line.replace(priority_match.as_str(), "").trim().to_string();
+                    if !description.is_empty() {
+                        self.add_objective(&description, priority, true);
+                    }
+                } else {
+                    eprintln!("Could not process line: {}", line);
+                }
+            }
         }
 
         Ok(())
@@ -333,31 +520,87 @@ pub async fn call_llm_api(
             api_key,
             model,
             temperature,
-            max_tokens,
+            max_completion_tokens,
             top_p,
             frequency_penalty,
             presence_penalty,
             system_prompt,
+            store,
+            metadata,
+            logit_bias,
+            logprobs,
+            top_logprobs,
+            modalities,
+            stop,
+            response_format,
+            stream,
+            parallel_tool_calls,
+            user,
         } => {
-            let prompt = if let Some(system) = system_prompt {
-                format!("{}\n{}", system, input_prompt)
-            } else {
-                input_prompt.to_string()
-            };
+            let mut messages = vec![];
+
+            if let Some(system) = system_prompt {
+                messages.push(json!({
+                    "role": "system",
+                    "content": system
+                }));
+            }
+
+            messages.push(json!({
+                "role": "user",
+                "content": input_prompt
+            }));
 
             let client = reqwest::Client::new();
+            let mut request_body = json!({
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_completion_tokens": max_completion_tokens,
+                "top_p": top_p,
+                "frequency_penalty": frequency_penalty,
+                "presence_penalty": presence_penalty,
+                "n": 1,
+            });
+
+            if let Some(store) = store {
+                request_body["store"] = json!(store);
+            }
+            if let Some(metadata) = metadata {
+                request_body["metadata"] = metadata.clone();
+            }
+            if let Some(logit_bias) = logit_bias {
+                request_body["logit_bias"] = logit_bias.clone();
+            }
+            if let Some(logprobs) = logprobs {
+                request_body["logprobs"] = json!(logprobs);
+            }
+            if let Some(top_logprobs) = top_logprobs {
+                request_body["top_logprobs"] = json!(top_logprobs);
+            }
+            if let Some(modalities) = modalities {
+                request_body["modalities"] = json!(modalities);
+            }
+            if let Some(stop) = stop {
+                request_body["stop"] = json!(stop);
+            }
+            if let Some(response_format) = response_format {
+                request_body["response_format"] = response_format.clone();
+            }
+            if let Some(stream) = stream {
+                request_body["stream"] = json!(stream);
+            }
+            if let Some(parallel_tool_calls) = parallel_tool_calls {
+                request_body["parallel_tool_calls"] = json!(parallel_tool_calls);
+            }
+            if let Some(user) = user {
+                request_body["user"] = json!(user);
+            }
+
             let response = client
-                .post("https://api.openai.com/v1/completions")
+                .post("https://api.openai.com/v1/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
-                .json(&serde_json::json!({
-                    "model": model,
-                    "prompt": prompt,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "top_p": top_p,
-                    "frequency_penalty": frequency_penalty,
-                    "presence_penalty": presence_penalty
-                }))
+                .json(&request_body)
                 .send()
                 .await;
 
@@ -370,7 +613,7 @@ pub async fn call_llm_api(
             };
 
             let response_json: Value = response.json().await?;
-            let completion = response_json["choices"][0]["text"]
+            let completion = response_json["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("")
                 .to_string();
@@ -384,24 +627,51 @@ pub async fn call_llm_api(
             top_k,
             top_p,
             system_prompt,
+            version,
+            stop_sequences,
+            stream,
+            metadata,
+            tool_choice,
+            tools,
         } => {
-            let prompt = if let Some(system) = system_prompt {
-                format!("{}\n{}", system, input_prompt)
-            } else {
-                input_prompt.to_string()
-            };
-
             let client = reqwest::Client::new();
+
+            let mut request_body = json!({
+                "model": model,
+                "messages": vec![json!({
+                    "role": "user",
+                    "content": input_prompt
+                })],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "system": system_prompt,
+                "top_k": top_k,
+                "top_p": top_p
+            });
+
+            if let Some(stop_sequences) = stop_sequences {
+                request_body["stop_sequences"] = json!(stop_sequences);
+            }
+
+            if let Some(metadata) = metadata {
+                request_body["metadata"] = json!(metadata);
+            }
+
+            if let Some(tool_choice) = tool_choice {
+                request_body["tool_choice"] = json!(tool_choice);
+            }
+
+            if let Some(tools) = tools {
+                request_body["tools"] = json!(tools);
+            }
+
+            request_body["stream"] = json!(stream);
+
             let response = client
-                .post(format!("https://api.anthropic.com/v1/claude/{}", model))
+                .post("https://api.anthropic.com/v1/messages")
                 .header("Authorization", format!("Bearer {}", api_key))
-                .json(&serde_json::json!({
-                    "prompt": prompt,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "top_k": top_k,
-                    "top_p": top_p
-                }))
+                .header("anthropic-version", version)
+                .json(&request_body)
                 .send()
                 .await;
 
@@ -414,47 +684,121 @@ pub async fn call_llm_api(
             };
 
             let response_json: Value = response.json().await?;
-            let completion = response_json["completion"]
-                .as_str()
+            let completion = response_json["content"]
+                .as_array()
+                .and_then(|arr| {
+                    arr.iter()
+                        .find_map(|c| c.get("text").and_then(|t| t.as_str()))
+                })
                 .unwrap_or("")
                 .to_string();
+
             Ok(completion)
         }
         LLMModel::Ollama {
-            api_key,
             model,
             temperature,
             max_tokens,
             top_p,
             frequency_penalty,
             presence_penalty,
+            format,
+            suffix,
+            system,
+            template,
+            context,
+            stream,
+            raw,
+            keep_alive,
+            options,
+            images,
         } => {
             let client = reqwest::Client::new();
+
+            let mut request_body = json!({
+                "model": model,
+                "prompt": input_prompt,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p,
+                "frequency_penalty": frequency_penalty,
+                "presence_penalty": presence_penalty,
+            });
+
+            if let Some(format) = format {
+                request_body["format"] = json!(format);
+            }
+            if let Some(suffix) = suffix {
+                request_body["suffix"] = json!(suffix);
+            }
+            if let Some(system) = system {
+                request_body["system"] = json!(system);
+            }
+            if let Some(template) = template {
+                request_body["template"] = json!(template);
+            }
+            if let Some(context) = context {
+                request_body["context"] = json!(context);
+            }
+            if let Some(stream) = stream {
+                request_body["stream"] = json!(stream);
+            }
+            if let Some(raw) = raw {
+                request_body["raw"] = json!(raw);
+            }
+            if let Some(keep_alive) = keep_alive {
+                request_body["keep_alive"] = json!(keep_alive);
+            }
+            if let Some(options) = options {
+                request_body["options"] = options.clone();
+            }
+            if let Some(images) = images {
+                request_body["images"] = json!(images);
+            }
+
             let response = client
-                .post("https://api.ollama.ai/generate")
-                .header("Authorization", format!("Bearer {}", api_key))
-                .json(&serde_json::json!({
-                    "model": model,
-                    "prompt": input_prompt,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "top_p": top_p,
-                    "frequency_penalty": frequency_penalty,
-                    "presence_penalty": presence_penalty
-                }))
+                .post("http://localhost:11434/api/generate")
+                .json(&request_body)
                 .send()
                 .await;
 
             let response = match response {
                 Ok(resp) => resp,
                 Err(e) => {
-                    eprintln!("Error sending request to Ollama API: {}", e);
+                    eprintln!("Error sending the request to Ollama: {}", e);
                     return Err(e.into());
                 }
             };
 
-            let response_json: Value = response.json().await?;
-            let completion = response_json["text"].as_str().unwrap_or("").to_string();
+            if !response.status().is_success() {
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown Error".to_string());
+                return Err(format!("Error en Ollama response: {}", error_text).into());
+            }
+
+            let mut completion = String::new();
+
+            let raw_response = response.text().await?;
+
+            for line in raw_response.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+
+                match serde_json::from_str::<serde_json::Value>(line) {
+                    Ok(json) => {
+                        if let Some(resp) = json.get("response").and_then(|r| r.as_str()) {
+                            completion.push_str(resp);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error processing JSON: {}. Error: {}", line, e);
+                    }
+                }
+            }
+
             Ok(completion)
         }
         LLMModel::Other { config } => {
@@ -489,7 +833,7 @@ pub async fn call_llm_api(
             }
 
             if let Some(body) = config.get("body") {
-                request = request.json(&serde_json::from_str::<Value>(body)?);
+                request = request.json(&from_str::<Value>(body)?);
             }
 
             let response: Result<reqwest::Response, reqwest::Error> = request.send().await;
