@@ -603,10 +603,15 @@ impl Workflow {
                 if let Some(listener) = listener_found {
                     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
+                    let repetitions = node
+                        .context
+                        .as_ref()
+                        .and_then(|v| v.as_number().and_then(|n| n.as_u64()));
+
                     let listener_task = tokio::spawn({
                         let listener = listener.clone();
                         async move {
-                            if let Err(e) = listener.listen_and_trigger(tx).await {
+                            if let Err(e) = listener.listen_and_trigger(tx, repetitions).await {
                                 eprintln!("Error in listener: {:?}", e);
                             }
                         }
@@ -795,7 +800,7 @@ impl Workflow {
                     println!("Executing OffChainConnector: {:?}", node.id);
 
                     match offchain_connector
-                        .execute_request(context_data.clone())
+                        .execute_offchain_connector(context_data.clone())
                         .await
                     {
                         Ok(response) => {

@@ -8,7 +8,7 @@ use crate::{
         nodes::{
             agents::{self, Agent, LLMModel, Objective},
             connectors::{
-                off_chain::{configure_new_offchain_connector, OffChainConnector},
+                off_chain::{configure_new_offchain_connector, ConnectorType, OffChainConnector},
                 on_chain::{configure_new_onchain_connector, OnChainConnector},
             },
             listeners::{configure_new_listener, Listener, ListenerType},
@@ -290,17 +290,11 @@ impl Nibble {
     pub fn add_listener(
         &mut self,
         name: &str,
-        event_name: &str,
         listener_type: ListenerType,
-        encrypted: bool,
+        encrypted: bool
     ) -> Result<AdapterHandle<'_, Listener>, Box<dyn Error + Send + Sync>> {
-        let listener = configure_new_listener(
-            name,
-            event_name,
-            listener_type,
-            encrypted,
-            &self.owner_wallet.address(),
-        )?;
+        let listener =
+            configure_new_listener(name, listener_type, encrypted, &self.owner_wallet.address())?;
         self.listeners.push(listener.clone());
         Ok(AdapterHandle {
             nibble: self,
@@ -403,22 +397,29 @@ impl Nibble {
     pub fn add_offchain_connector(
         &mut self,
         name: &str,
+        connector_type: ConnectorType,
         api_url: &str,
         encrypted: bool,
         http_method: Method,
         headers: Option<HashMap<String, String>>,
-        execution_fn: Option<
-            Box<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
+        params: Option<HashMap<String, String>>,
+        auth_tokens: Option<Value>,
+        result_processing_fn: Option<
+            Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
         >,
+        address: &H160,
     ) -> Result<AdapterHandle<'_, OffChainConnector>, Box<dyn Error + Send + Sync>> {
         let off_chain = configure_new_offchain_connector(
             name,
+            connector_type,
             api_url,
             encrypted,
             http_method,
             headers,
-            execution_fn.map(|f| Arc::from(f)),
-            &self.owner_wallet.address(),
+            params,
+            auth_tokens,
+            result_processing_fn,
+            address,
         )?;
 
         self.offchain_connectors.push(off_chain.clone());

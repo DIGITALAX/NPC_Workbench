@@ -1,8 +1,7 @@
 use crate::{nibble::Adaptable, utils::generate_unique_id};
 use ethers::{core::rand::thread_rng, prelude::*};
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde_json::{from_str, json, Map, Value};
+use serde_json::{from_str, json, to_string, Map, Number, Value};
 use std::{collections, error::Error, iter::Iterator, str::FromStr};
 
 #[derive(Debug, Clone)]
@@ -58,11 +57,15 @@ pub enum LLMModel {
         stream: Option<bool>,
         raw: Option<bool>,
         keep_alive: Option<String>,
-        options: Option<serde_json::Value>,
+        options: Option<Value>,
         images: Option<Vec<String>>,
     },
     Other {
-        config: collections::HashMap<String, String>,
+        url: String,
+        api_key: Option<String>,
+        body: collections::HashMap<String, String>,
+        result_path: String,
+        result_type: String,
     },
 }
 
@@ -378,7 +381,7 @@ impl LLMModel {
                         Value::Array(
                             context
                                 .iter()
-                                .map(|&num| Value::Number(serde_json::Number::from(num)))
+                                .map(|&num| Value::Number(Number::from(num)))
                                 .collect(),
                         ),
                     );
@@ -404,14 +407,35 @@ impl LLMModel {
                 }
                 Value::Object(map)
             }
-            LLMModel::Other { config } => {
-                let config_map: Map<String, Value> = config
+            LLMModel::Other {
+                url,
+                api_key,
+                body,
+                result_path,
+                result_type,
+            } => {
+                let body_map: Map<String, Value> = body
                     .iter()
                     .map(|(k, v)| (k.clone(), Value::String(v.clone())))
                     .collect();
+
                 let mut map = Map::new();
                 map.insert("type".to_string(), Value::String("Other".to_string()));
-                map.insert("config".to_string(), Value::Object(config_map));
+                map.insert("url".to_string(), Value::String(url.clone()));
+                map.insert(
+                    "result_path".to_string(),
+                    Value::String(result_path.clone()),
+                );
+                map.insert(
+                    "result_type".to_string(),
+                    Value::String(result_type.clone()),
+                );
+
+                if let Some(api_key) = api_key {
+                    map.insert("api_key".to_string(), Value::String(api_key.clone()));
+                }
+
+                map.insert("body".to_string(), Value::Object(body_map));
                 Value::Object(map)
             }
         }
@@ -473,6 +497,7 @@ impl Agent {
         );
 
         let generated_objective = self.execute_agent(&prompt).await?;
+
 
         let re = Regex::new(
             r"(?i)(objective|goal|task|focus|priority):?\s*(?P<description>.+?)\s*(,|;|:|\.)?\s*(priority|rank|importance):?\s*(?P<priority>\d+)",
@@ -669,7 +694,7 @@ pub async fn call_llm_api(
 
             let response = client
                 .post("https://api.anthropic.com/v1/messages")
-                .header("Authorization", format!("Bearer {}", api_key))
+                .header("x-api-key", api_key)
                 .header("anthropic-version", version)
                 .json(&request_body)
                 .send()
@@ -787,7 +812,7 @@ pub async fn call_llm_api(
                     continue;
                 }
 
-                match serde_json::from_str::<serde_json::Value>(line) {
+                match from_str::<Value>(line) {
                     Ok(json) => {
                         if let Some(resp) = json.get("response").and_then(|r| r.as_str()) {
                             completion.push_str(resp);
@@ -801,42 +826,27 @@ pub async fn call_llm_api(
 
             Ok(completion)
         }
-        LLMModel::Other { config } => {
-            let url = config.get("url").ok_or("Missing 'url' in configuration.")?;
-            let default_method = String::from("POST");
-            let method = config.get("method").unwrap_or(&default_method);
-            let headers: HeaderMap = config
-                .iter()
-                .filter(|(key, _)| key.starts_with("header_"))
-                .map(|(key, value)| {
-                    let header_name =
-                        HeaderName::from_bytes(key.trim_start_matches("header_").as_bytes())
-                            .map_err(|e| format!("Invalid header name: {}", e))?;
-                    let header_value = HeaderValue::from_str(value)
-                        .map_err(|e| format!("Invalid header value: {}", e))?;
-                    Ok((header_name, header_value))
-                })
-                .collect::<Result<HeaderMap, String>>()?;
-
+        LLMModel::Other {
+            url,
+            api_key,
+            body,
+            result_path,
+            result_type,
+        } => {
             let client = reqwest::Client::new();
 
-            let mut request = match method.as_str() {
-                "GET" => client.get(url),
-                "POST" => client.post(url),
-                "PUT" => client.put(url),
-                "DELETE" => client.delete(url),
-                _ => return Err(format!("Unsupported HTTP method: {}", method).into()),
-            };
-
-            if !headers.is_empty() {
-                request = request.headers(headers);
+            let mut body_json = Map::new();
+            for (key, value) in body {
+                body_json.insert(key.clone(), Value::String(value.clone()));
             }
 
-            if let Some(body) = config.get("body") {
-                request = request.json(&from_str::<Value>(body)?);
+            let mut request = client.post(url);
+            if let Some(api_key) = api_key {
+                request = request.header("Authorization", format!("Bearer {}", api_key));
             }
 
-            let response: Result<reqwest::Response, reqwest::Error> = request.send().await;
+            let response = request.json(&body_json).send().await;
+
 
             let response = match response {
                 Ok(resp) => resp,
@@ -846,13 +856,51 @@ pub async fn call_llm_api(
                 }
             };
 
-            let response_json: Value = response.json().await?;
-            let completion = response_json["result"]
-                .as_str()
-                .unwrap_or("No result field found in response.")
-                .to_string();
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
 
-            Ok(completion)
+                eprintln!(
+                    "API returned an error: status = {}, body = {}",
+                    status, error_body
+                );
+                return Err(format!(
+                    "API returned an error: status = {}, body = {}",
+                    status, error_body
+                )
+                .into());
+            }
+
+
+            let response_json: Value = response.json().await?;
+            let path_segments: Vec<&str> = result_path.split('.').collect();
+            let mut current_value = &response_json;
+
+            for segment in path_segments {
+                if let Some(next_value) = current_value.get(segment) {
+                    current_value = next_value;
+                } else {
+                    return Err(format!("Path segment '{}' not found in response", segment).into());
+                }
+            }
+
+            match result_type.as_str() {
+                "string" => Ok(current_value.as_str().unwrap_or("").to_string()),
+                "number" => Ok(current_value.as_f64().unwrap_or(0.0).to_string()),
+                "boolean" => Ok(current_value.as_bool().unwrap_or(false).to_string()),
+                "array" => Ok(current_value
+                    .as_array()
+                    .map(|arr| to_string(arr).unwrap_or("[]".to_string()))
+                    .unwrap_or("[]".to_string())),
+                "object" => Ok(current_value
+                    .as_object()
+                    .map(|obj| to_string(obj).unwrap_or("{}".to_string()))
+                    .unwrap_or("{}".to_string())),
+                _ => Err("Unsupported result type or type not specified".into()),
+            }
         }
     }
 }

@@ -8,7 +8,7 @@ use crate::{
         nodes::{
             agents::{Agent, LLMModel, Objective},
             connectors::{
-                off_chain::OffChainConnector,
+                off_chain::{ConnectorType, OffChainConnector},
                 on_chain::{GasOptions, OnChainConnector, OnChainTransaction},
             },
             listeners::{Listener, ListenerType, OffChainCheck, OnChainCheck},
@@ -567,13 +567,32 @@ fn parse_llm_model(metadata: &Value) -> Result<LLMModel, Box<dyn Error + Send + 
                         .collect()
                 }),
         }),
-
         _ => Ok(LLMModel::Other {
-            config: metadata
-                .as_object()
+            url: metadata
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            result_path: metadata
+                .get("result_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            result_type: metadata
+                .get("result_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            api_key: metadata
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            body: metadata
+                .get("body")
+                .and_then(|v| v.as_object())
                 .unwrap_or(&Map::new())
                 .iter()
-                .map(|(k, v)| (k.clone(), v.to_string()))
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
                 .collect(),
         }),
     }
@@ -1237,6 +1256,44 @@ pub async fn build_offchain_connectors(
                         .collect::<HashMap<String, String>>()
                 });
 
+            let connector_type = metadata
+                .get("connector_type")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing connector_type")?;
+
+            let connector_type = match connector_type {
+                "REST" => {
+                    let base_payload = metadata.get("base_payload").cloned().unwrap_or(Value::Null);
+                    ConnectorType::REST {
+                        base_payload: if base_payload.is_null() {
+                            None
+                        } else {
+                            Some(base_payload)
+                        },
+                    }
+                }
+                "GraphQL" => {
+                    let query = metadata
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .ok_or("Missing query for GraphQL connector")?
+                        .to_string();
+
+                        let variables = metadata
+                        .get("variables")
+                        .and_then(|v| v.as_object())
+                        .map(|map| {
+                            map.iter()
+                                .filter_map(|(k, v)| v.as_str().map(|val| (k.clone(), val.to_string())))
+                                .collect::<HashMap<String, String>>()
+                        });
+                    
+
+                    ConnectorType::GraphQL { query, variables }
+                }
+                _ => return Err("Invalid connector_type".into()),
+            };
+
             let execution_fn: Option<
                 Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
             > = Some(Arc::new(|_input: Value| Ok(Value::Null)));
@@ -1244,11 +1301,14 @@ pub async fn build_offchain_connectors(
             offchain_connectors.push(OffChainConnector {
                 name,
                 id,
+                connector_type,
                 api_url,
                 encrypted,
                 http_method,
                 headers,
-                execution_fn,
+                params: None,
+                auth_tokens: None,
+                result_processing_fn: execution_fn,
             });
         }
     }
