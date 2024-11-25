@@ -775,6 +775,34 @@ mod tests {
                 nonce: None,
             }));
             
+
+            /* 
+            Workflow One:
+             [1] Link timer 
+             [2] Node off-chain to check lens notifications
+             [3] Link evaluation to decide which notification to respond
+             [4] Node agent to generate response
+             [5] Node condition to choose off-chain connector type
+             [6] Node off-chain connector to make lens interaction
+            */
+
+     
+            /* 
+            Workflow Two:
+             [1] Node agent to generate token lore from agent
+             [2] Node on-chain connector to deploy token contract
+             [3] Node on-chain connector to create the uniswap pool
+             [4] Node on-chain connector to create the balancer pool
+            */
+
+
+            /* 
+            Workflow Three:
+             [1] Link timer
+             [2] Node off-chain connector to check notifications and interactions
+             [3] Link evaluate to choose who to start distributing the token
+             [4] Node on-chain connector to distribute the token to addresses
+            */
             
             }
             Err(e) => {

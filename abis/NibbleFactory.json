@@ -16,7 +16,9 @@
         "name": "accessControlsImp",
         "type": "address",
         "internalType": "address"
-      }
+      },
+      { "name": "fheGatesImp", "type": "address", "internalType": "address" },
+      { "name": "workflowsImp", "type": "address", "internalType": "address" }
     ],
     "stateMutability": "nonpayable"
   },
@@ -60,7 +62,7 @@
     "name": "deployFromFactory",
     "inputs": [],
     "outputs": [
-      { "name": "", "type": "address[7]", "internalType": "address[7]" },
+      { "name": "", "type": "address[9]", "internalType": "address[9]" },
       { "name": "", "type": "bytes", "internalType": "bytes" },
       { "name": "", "type": "uint256", "internalType": "uint256" }
     ],
@@ -69,6 +71,13 @@
   {
     "type": "function",
     "name": "evaluationsImplementation",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "fheGatesImplementation",
     "inputs": [],
     "outputs": [{ "name": "", "type": "address", "internalType": "address" }],
     "stateMutability": "view"
@@ -187,6 +196,13 @@
     "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "workflowsImplementation",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }],
+    "stateMutability": "view"
+  },
+  {
     "type": "event",
     "name": "NibbleDeployed",
     "inputs": [
@@ -227,7 +243,19 @@
         "internalType": "address"
       },
       {
+        "name": "fheGatesContract",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
         "name": "accessControlsContract",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "workflowsContract",
         "type": "address",
         "indexed": false,
         "internalType": "address"

@@ -1,0 +1,17 @@
+type NibbleDeployed @entity(immutable: true) {
+  id: Bytes!
+  storageContract: Bytes! # address
+  listenersContract: Bytes! # address
+  conditionsContract: Bytes! # address
+  evaluationsContract: Bytes! # address
+  agentsContract: Bytes! # address
+  connectorsContract: Bytes! # address
+  fheGatesContract: Bytes! # address
+  accessControlsContract: Bytes! # address
+  workflowsContract: Bytes! # address
+  NibbleFactory_id: Bytes! # bytes
+  count: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}

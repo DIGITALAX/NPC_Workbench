@@ -996,7 +996,11 @@ impl Workflow {
 
                 if let Some(condition) = condition_found {
                     match condition
-                        .check_condition(&self.nibble_context, processed_context.clone())
+                        .check_condition(
+                            &self.nibble_context,
+                            processed_context.clone(),
+                            link.context.clone(),
+                        )
                         .await
                     {
                         Ok(response) => {

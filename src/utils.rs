@@ -1,7 +1,9 @@
 use crate::{
     adapters::{
         links::{
-            conditions::{Condition, ConditionCheck, ConditionType, TimeComparisonType},
+            conditions::{
+                Condition, ConditionCheck, ConditionType, LogicalOperator, TimeComparisonType,
+            },
             evaluations::{Evaluation, EvaluationResponseType, EvaluationType},
             fhe_gates::FHEGate,
             listeners::{Listener, ListenerType},
@@ -651,6 +653,20 @@ async fn build_conditions(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
+                },
+                "Composite" => ConditionType::Composite {
+                    operator: metadata
+                        .get("operator")
+                        .and_then(|v| v.as_str())
+                        .ok_or("Missing operator")?
+                        .parse::<LogicalOperator>()?,
+                    sub_conditions: metadata
+                        .get("sub_conditions")
+                        .and_then(|v| v.as_array())
+                        .ok_or("Missing or invalid sub_conditions")?
+                        .iter()
+                        .map(Condition::from_json)
+                        .collect::<Result<Vec<Condition>, String>>()?,
                 },
 
                 "ContextBased" => ConditionType::ContextBased {},

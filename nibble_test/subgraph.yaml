@@ -1,0 +1,26 @@
+specVersion: 1.0.0
+indexerHints:
+  prune: auto
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: NibbleFactory
+    network: polygon-amoy
+    source:
+      address: "0x5498868F9801f73FEb424ba965a0fE42Cd3cf1a5"
+      abi: NibbleFactory
+      startBlock: 14871947
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - NibbleDeployed
+      abis:
+        - name: NibbleFactory
+          file: ./abis/NibbleFactory.json
+      eventHandlers:
+        - event: NibbleDeployed(address,address,address,address,address,address,address,address,address,bytes,uint256)
+          handler: handleNibbleDeployed
+      file: ./src/nibble-factory.ts

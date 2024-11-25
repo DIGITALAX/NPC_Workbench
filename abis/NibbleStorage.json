@@ -62,6 +62,11 @@
                 "type": "string",
                 "internalType": "string"
               },
+              {
+                "name": "wallet",
+                "type": "address",
+                "internalType": "address"
+              },
               { "name": "encrypted", "type": "bool", "internalType": "bool" },
               { "name": "writer", "type": "bool", "internalType": "bool" }
             ]
@@ -70,6 +75,20 @@
             "name": "evaluations",
             "type": "tuple[]",
             "internalType": "struct NibbleLibrary.Evaluation[]",
+            "components": [
+              { "name": "id", "type": "bytes", "internalType": "bytes" },
+              {
+                "name": "metadata",
+                "type": "string",
+                "internalType": "string"
+              },
+              { "name": "encrypted", "type": "bool", "internalType": "bool" }
+            ]
+          },
+          {
+            "name": "fheGates",
+            "type": "tuple[]",
+            "internalType": "struct NibbleLibrary.FHEGate[]",
             "components": [
               { "name": "id", "type": "bytes", "internalType": "bytes" },
               {
@@ -88,30 +107,16 @@
   },
   {
     "type": "function",
-    "name": "deleteAdaptersBatch",
+    "name": "addOrModifyWorkflow",
     "inputs": [
       {
-        "name": "adapters",
+        "name": "workflow",
         "type": "tuple",
-        "internalType": "struct NibbleLibrary.DeleteAdapters",
+        "internalType": "struct NibbleLibrary.Workflow",
         "components": [
-          {
-            "name": "conditions",
-            "type": "bytes[]",
-            "internalType": "bytes[]"
-          },
-          { "name": "listeners", "type": "bytes[]", "internalType": "bytes[]" },
-          {
-            "name": "connectors",
-            "type": "bytes[]",
-            "internalType": "bytes[]"
-          },
-          { "name": "agents", "type": "bytes[]", "internalType": "bytes[]" },
-          {
-            "name": "evaluations",
-            "type": "bytes[]",
-            "internalType": "bytes[]"
-          }
+          { "name": "id", "type": "bytes", "internalType": "bytes" },
+          { "name": "metadata", "type": "string", "internalType": "string" },
+          { "name": "encrypted", "type": "bool", "internalType": "bool" }
         ]
       }
     ],
@@ -154,6 +159,16 @@
       },
       {
         "name": "nibbleEvaluationsAddress",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "nibbleFHEGatesAddress",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "nibbleWorkflowsAddress",
         "type": "address",
         "internalType": "address"
       }
@@ -224,6 +239,19 @@
   },
   {
     "type": "function",
+    "name": "nibbleFHEGates",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract NibbleFHEGates"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "nibbleListeners",
     "inputs": [],
     "outputs": [
@@ -236,15 +264,84 @@
     "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "nibbleWorkflows",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract NibbleWorkflows"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "removeAdaptersBatch",
+    "inputs": [
+      {
+        "name": "adapters",
+        "type": "tuple",
+        "internalType": "struct NibbleLibrary.RemoveAdapters",
+        "components": [
+          {
+            "name": "conditions",
+            "type": "bytes[]",
+            "internalType": "bytes[]"
+          },
+          { "name": "listeners", "type": "bytes[]", "internalType": "bytes[]" },
+          {
+            "name": "connectors",
+            "type": "bytes[]",
+            "internalType": "bytes[]"
+          },
+          { "name": "agents", "type": "bytes[]", "internalType": "bytes[]" },
+          {
+            "name": "evaluations",
+            "type": "bytes[]",
+            "internalType": "bytes[]"
+          },
+          { "name": "fheGates", "type": "bytes[]", "internalType": "bytes[]" }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "removeWorkflow",
+    "inputs": [
+      { "name": "workflowId", "type": "bytes", "internalType": "bytes" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
     "type": "event",
     "name": "AdaptersDeleted",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "writer",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
     "anonymous": false
   },
   {
     "type": "event",
     "name": "AdaptersModified",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "writer",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
     "anonymous": false
   },
   {
@@ -260,7 +357,46 @@
     ],
     "anonymous": false
   },
+  {
+    "type": "event",
+    "name": "WorkflowDeleted",
+    "inputs": [
+      {
+        "name": "workflowId",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      },
+      {
+        "name": "writer",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "WorkflowModified",
+    "inputs": [
+      {
+        "name": "workflowId",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      },
+      {
+        "name": "writer",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
   { "type": "error", "name": "InvalidInitialization", "inputs": [] },
   { "type": "error", "name": "InvalidInitializer", "inputs": [] },
+  { "type": "error", "name": "InvalidRole", "inputs": [] },
   { "type": "error", "name": "NotInitializing", "inputs": [] }
 ]
