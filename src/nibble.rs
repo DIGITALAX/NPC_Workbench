@@ -20,7 +20,7 @@ use crate::{
     utils::{generate_unique_id, load_nibble_from_subgraph, load_workflow_from_subgraph},
     workflow::Workflow,
 };
-use abi::{decode,  ParamType};
+use abi::{decode, ParamType};
 use ethers::{
     abi::{Abi, Token, Tokenize},
     prelude::*,
@@ -554,53 +554,34 @@ impl Nibble {
                             ],
                             &log_data_bytes,
                         )?;
-
-                        let return_values: ([Address; 9], Vec<u8>, U256) = {
-                            let addresses: [Address; 9] = decoded
-                                .get(0)
-                                .and_then(|token| {
-                                    if let Token::Array(array) = token {
-                                        let address_vec: Vec<Address> = array
-                                            .iter()
-                                            .filter_map(|t| {
-                                                if let Token::Address(addr) = t {
-                                                    Some(*addr)
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .collect();
-                                        address_vec.try_into().ok()
-                                    } else {
-                                        None
-                                    }
+                        let addresses: Vec<Address> = match decoded.get(0) {
+                            Some(Token::Array(arr)) => arr
+                                .iter()
+                                .filter_map(|t| match t {
+                                    Token::Address(addr) => Some(*addr),
+                                    _ => None,
                                 })
-                                .ok_or_else(|| "Invalid address array")?;
-
-                            let id: Vec<u8> = decoded
-                                .get(1)
-                                .and_then(|token| {
-                                    if let Token::Bytes(bytes) = token {
-                                        Some(bytes.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .ok_or_else(|| "Invalid ID bytes")?;
-
-                            let count: U256 = decoded
-                                .get(2)
-                                .and_then(|token| {
-                                    if let Token::Uint(count) = token {
-                                        Some(*count)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .ok_or_else(|| "Invalid count")?;
-
-                            (addresses, id, count)
+                                .collect(),
+                            _ => return Err("Invalid address array".into()),
                         };
+
+                        let id = match decoded.get(1) {
+                            Some(Token::Bytes(bytes)) => bytes.clone(),
+                            _ => return Err("Invalid ID bytes".into()),
+                        };
+
+                        let count = match decoded.get(2) {
+                            Some(Token::Uint(count)) => *count,
+                            _ => return Err("Invalid count".into()),
+                        };
+
+                        let return_values: ([Address; 9], Vec<u8>, U256) = (
+                            addresses
+                                .try_into()
+                                .map_err(|_| "Invalid number of addresses")?,
+                            id,
+                            count,
+                        );
 
                         self.contracts = vec![
                             ContractInfo {

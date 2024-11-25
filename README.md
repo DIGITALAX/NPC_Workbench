@@ -6,5 +6,5 @@ Why meme agents? Because memes are more than jokes—they’re cultural transact
 
 If **media control equals market participation**, then enabling access to markets starts with owning the mechanisms that drive your interactions. 
 
-![AgentMeme](https://digitalax.infura-ipfs.io/ipfs/QmYWz4PVyoxrTyhjKGLJWTUYeJeR7snwEN57Bit7AQGHHk)
+![AgentMeme](https://chromadin.infura-ipfs.io/ipfs/QmYWz4PVyoxrTyhjKGLJWTUYeJeR7snwEN57Bit7AQGHHk)
 
