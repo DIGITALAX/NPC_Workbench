@@ -35,6 +35,7 @@ pub enum ListenerType {
     },
     OffChain {
         webhook_url: String,
+        sns_verification: bool,
     },
     Timer {
         interval: Duration,
@@ -99,8 +100,16 @@ impl Listener {
                 sub_map.insert("chain".to_string(), Value::String(format!("{:?}", chain)));
                 Value::Object(sub_map)
             }
-            ListenerType::OffChain { webhook_url } => {
+            ListenerType::OffChain {
+                webhook_url,
+                sns_verification,
+            } => {
                 let mut sub_map = Map::new();
+
+                sub_map.insert(
+                    "sns_verification".to_string(),
+                    Value::Bool(sns_verification.clone()),
+                );
                 sub_map.insert(
                     "webhook_url".to_string(),
                     Value::String(webhook_url.clone()),
@@ -171,7 +180,10 @@ impl Listener {
                 }
             }
 
-            ListenerType::OffChain { webhook_url } => {
+            ListenerType::OffChain {
+                webhook_url,
+                sns_verification,
+            } => {
                 let client = Client::new();
 
                 loop {
@@ -184,8 +196,41 @@ impl Listener {
 
                     let response = client.get(webhook_url).send().await?;
                     let result = response.json::<Value>().await?;
-                    println!("Webhook data received: {:?}", result);
-                    sender.send(result).await?;
+                    if *sns_verification {
+                        if let Some(payload_type) = result["Type"].as_str() {
+                            match payload_type {
+                                "SubscriptionConfirmation" => {
+                                    if let Some(subscribe_url) = result["SubscribeURL"].as_str() {
+                                        let confirm_response =
+                                            client.get(subscribe_url).send().await?;
+                                        if confirm_response.status().is_success() {
+                                            println!("Subscription confirmed: {}", subscribe_url);
+                                        } else {
+                                            eprintln!(
+                                                "Failed to confirm subscription: {}",
+                                                subscribe_url
+                                            );
+                                        }
+                                    }
+                                }
+                                "Notification" => {
+                                    println!("SNS Notification received: {:?}", result);
+                                    sender.send(result.clone()).await?;
+                                }
+                                "UnsubscribeConfirmation" => {
+                                    println!("Received UnsubscribeConfirmation: {:?}", result);
+                                }
+                                _ => {
+                                    println!("Unhandled SNS Type: {:?}", payload_type);
+                                }
+                            }
+                        } else {
+                            eprintln!("Invalid SNS payload: {:?}", result);
+                        }
+                    } else {
+                        println!("Webhook data received: {:?}", result);
+                        sender.send(result.clone()).await?;
+                    }
 
                     executed += 1;
                     sleep(Duration::from_secs(5)).await;

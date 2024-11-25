@@ -2,8 +2,9 @@ use crate::{
     adapters::{
         links::{
             conditions::{Condition, ConditionCheck, ConditionType, TimeComparisonType},
-            evaluations::{Evaluation, EvaluationType},
+            evaluations::{Evaluation, EvaluationResponseType, EvaluationType},
             fhe_gates::FHEGate,
+            listeners::{Listener, ListenerType},
         },
         nodes::{
             agents::{Agent, LLMModel, Objective},
@@ -11,12 +12,12 @@ use crate::{
                 off_chain::{ConnectorType, OffChainConnector},
                 on_chain::{GasOptions, OnChainConnector, OnChainTransaction},
             },
-            listeners::{Listener, ListenerType, OffChainCheck, OnChainCheck},
         },
     },
     constants::{GRAPH_ENDPOINT_DEV, GRAPH_ENDPOINT_PROD},
     encrypt::decrypt_with_private_key,
     nibble::ContractInfo,
+    tools::{context::ContextParse, history::HistoryParse},
     workflow::{
         ExecutionHistory, LinkAdapter, LinkTarget, NodeAdapter, WorkflowLink, WorkflowNode,
     },
@@ -759,7 +760,6 @@ async fn build_listeners(
                         .and_then(|v| v.as_str())
                         .ok_or("Missing abi")?
                         .to_string(),
-                    repetitions: metadata.get("repetitions").and_then(|v| v.as_u64()),
 
                     chain: metadata
                         .get("chain")
@@ -775,7 +775,10 @@ async fn build_listeners(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    repetitions: metadata.get("repetitions").and_then(|v| v.as_u64()),
+                    sns_verification: metadata
+                        .get("sns_verification")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                 },
                 "Timer" => ListenerType::Timer {
                     interval: metadata
@@ -783,81 +786,6 @@ async fn build_listeners(
                         .and_then(|v| v.as_u64())
                         .map(Duration::from_secs)
                         .ok_or("Missing interval")?,
-                    check_onchain: metadata
-                        .get("check_onchain")
-                        .map(|v| {
-                            let contract_address = v
-                                .get("contract_address")
-                                .and_then(|addr| addr.as_str())
-                                .ok_or("Missing contract_address for check_onchain")?
-                                .parse::<Address>()?;
-                            let function_name = v
-                                .get("function_name")
-                                .and_then(|name| name.as_str())
-                                .ok_or("Missing function_name for check_onchain")?
-                                .to_string();
-                            let abi = v
-                                .get("abi")
-                                .and_then(|abi| abi.as_str())
-                                .ok_or("Missing abi for check_onchain")?
-                                .to_string();
-                            let args = v.get("args").cloned();
-                            let expected_return_type = v
-                                .get("expected_return_type")
-                                .and_then(|t| t.as_str())
-                                .ok_or("Missing expected_return_type for check_onchain")?
-                                .to_string();
-
-                            let chain = v
-                                .get("chain")
-                                .and_then(|c| c.as_str())
-                                .ok_or("Missing chain for check_onchain")?
-                                .parse::<Chain>()?;
-
-                            Ok::<OnChainCheck, Box<dyn Error + Send + Sync>>(OnChainCheck {
-                                contract_address,
-                                function_name,
-                                abi,
-                                args,
-                                expected_return_type,
-                                provider,
-                                chain,
-                                wallet,
-                            })
-                        })
-                        .transpose()?,
-                    check_offchain: metadata
-                        .get("check_offchain")
-                        .map(|v| {
-                            let api_endpoint = v
-                                .get("api_endpoint")
-                                .and_then(|api| api.as_str())
-                                .ok_or("Missing api_endpoint for check_offchain")?
-                                .to_string();
-                            let params = v.get("params").and_then(|p| p.as_object()).map(|obj| {
-                                obj.iter()
-                                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-                                    .collect()
-                            });
-                            let headers = v.get("headers").and_then(|h| h.as_object()).map(|obj| {
-                                obj.iter()
-                                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-                                    .collect()
-                            });
-                            let expected_return_type = v
-                                .get("expected_return_type")
-                                .and_then(|t| t.as_str())
-                                .ok_or("Missing expected_return_type for check_offchain")?
-                                .to_string();
-                            Ok::<OffChainCheck, Box<dyn Error + Send + Sync>>(OffChainCheck {
-                                api_endpoint,
-                                params,
-                                headers,
-                                expected_return_type,
-                            })
-                        })
-                        .transpose()?,
-                    repetitions: metadata.get("repetitions").and_then(|v| v.as_u64()),
                 },
                 _ => return Err("Invalid listener_type".into()),
             };
@@ -865,13 +793,7 @@ async fn build_listeners(
             listeners.push(Listener {
                 name,
                 id,
-                event_name: metadata
-                    .get("event_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unnamed Event")
-                    .to_string(),
                 listener_type,
-
                 encrypted,
             });
         }
@@ -953,10 +875,17 @@ async fn build_evaluations(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    approval_threshold: metadata
-                        .get("approval_threshold")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0),
+                    response_type: match metadata.get("response_type") {
+                        Some(Value::Bool(expected)) => EvaluationResponseType::Boolean {
+                            expected: *expected,
+                        },
+                        Some(Value::Number(num)) => num
+                            .as_f64()
+                            .map(|threshold| EvaluationResponseType::Score { threshold })
+                            .unwrap_or(EvaluationResponseType::Dynamic),
+                        Some(_) => EvaluationResponseType::Dynamic,
+                        None => EvaluationResponseType::Dynamic,
+                    },
                 },
                 "AgentJudge" => EvaluationType::AgentJudge {
                     prompt: metadata
@@ -969,10 +898,17 @@ async fn build_evaluations(
                         .and_then(|v| v.as_str())
                         .map(|s| s.as_bytes().to_vec())
                         .unwrap_or_else(|| vec![0]),
-                    approval_threshold: metadata
-                        .get("approval_threshold")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0),
+                    response_type: match metadata.get("response_type") {
+                        Some(Value::Bool(expected)) => EvaluationResponseType::Boolean {
+                            expected: *expected,
+                        },
+                        Some(Value::Number(num)) => num
+                            .as_f64()
+                            .map(|threshold| EvaluationResponseType::Score { threshold })
+                            .unwrap_or(EvaluationResponseType::Dynamic),
+                        Some(_) => EvaluationResponseType::Dynamic,
+                        None => EvaluationResponseType::Dynamic,
+                    },
                 },
                 _ => return Err("Invalid evaluation_type".into()),
             };
@@ -1279,15 +1215,17 @@ pub async fn build_offchain_connectors(
                         .ok_or("Missing query for GraphQL connector")?
                         .to_string();
 
-                        let variables = metadata
-                        .get("variables")
-                        .and_then(|v| v.as_object())
-                        .map(|map| {
-                            map.iter()
-                                .filter_map(|(k, v)| v.as_str().map(|val| (k.clone(), val.to_string())))
-                                .collect::<HashMap<String, String>>()
-                        });
-                    
+                    let variables =
+                        metadata
+                            .get("variables")
+                            .and_then(|v| v.as_object())
+                            .map(|map| {
+                                map.iter()
+                                    .filter_map(|(k, v)| {
+                                        v.as_str().map(|val| (k.clone(), val.to_string()))
+                                    })
+                                    .collect::<HashMap<String, String>>()
+                            });
 
                     ConnectorType::GraphQL { query, variables }
                 }
@@ -1309,6 +1247,7 @@ pub async fn build_offchain_connectors(
                 params: None,
                 auth_tokens: None,
                 result_processing_fn: execution_fn,
+                auth_subflow: None,
             });
         }
     }
@@ -1337,7 +1276,6 @@ fn build_nodes(
                 "OffChainConnector" => NodeAdapter::OffChainConnector,
                 "OnChainConnector" => NodeAdapter::OnChainConnector,
                 "Agent" => NodeAdapter::Agent,
-                "Listener" => NodeAdapter::Listener,
                 _ => return Err("Invalid adapter_type".into()),
             };
 
@@ -1356,6 +1294,59 @@ fn build_nodes(
                 .get("context")
                 .and_then(|val| Value::try_from(val.clone()).ok());
 
+            let description = node_data
+                .get("description")
+                .and_then(|val| val.as_str().map(|s| s.to_string()));
+
+            let context_tool = node_data
+                .get("context_tool")
+                .and_then(|v| v.as_object())
+                .map(|tool_data| {
+                    let required_fields: Vec<String> = tool_data
+                        .get("required_fields")
+                        .and_then(|fields| fields.as_array())
+                        .map(|fields| {
+                            fields
+                                .iter()
+                                .filter_map(|field| field.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    ContextParse::ParseFields {
+                        expected_format: tool_data.clone(),
+                        required_fields,
+                    }
+                });
+
+            let history_tool = node_data
+                .get("history_tool")
+                .and_then(|v| v.as_object())
+                .map(|tool_data| {
+                    if let Some(index) = tool_data.get("index").and_then(|v| v.as_u64()) {
+                        let field_path: Vec<String> = tool_data
+                            .get("field_path")
+                            .and_then(|fields| fields.as_array())
+                            .map(|fields| {
+                                fields
+                                    .iter()
+                                    .filter_map(|field| field.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        HistoryParse::ExtractField {
+                            index: index as usize,
+                            field_path,
+                        }
+                    } else {
+                        eprintln!("Invalid or missing 'index' in history_tool configuration.");
+                        HistoryParse::CustomProcessor {
+                            function: |_| Err("Invalid history_tool configuration".to_string()),
+                        }
+                    }
+                });
+
             nodes.insert(
                 id.clone(),
                 WorkflowNode {
@@ -1364,6 +1355,9 @@ fn build_nodes(
                     adapter_id,
                     repetitions,
                     context,
+                    description,
+                    history_tool,
+                    context_tool,
                 },
             );
         }
@@ -1398,12 +1392,16 @@ fn build_execution_history(
                 .and_then(|v| v.as_str())
                 .and_then(|ts| DateTime::<Utc>::from_str(ts).ok())
                 .unwrap_or_else(Utc::now);
+            let description = item
+                .get("description")
+                .and_then(|val| val.as_str().map(|s| s.to_string()));
 
             execution_history.push(ExecutionHistory {
                 element_id,
                 element_type,
                 result,
                 timestamp,
+                description,
             });
         }
     }
@@ -1438,7 +1436,7 @@ fn build_links(
                 "Evaluation" => LinkAdapter::Evaluation,
                 "Condition" => LinkAdapter::Condition,
                 "FHEGate" => LinkAdapter::FHEGate,
-
+                "Listener" => LinkAdapter::Listener,
                 _ => return Err("Invalid adapter_type".into()),
             };
 
@@ -1451,13 +1449,67 @@ fn build_links(
                 .get("context")
                 .and_then(|val| Value::try_from(val.clone()).ok());
 
+            let description = link_data
+                .get("description")
+                .and_then(|val| val.as_str().map(|s| s.to_string()));
+
             let target = link_data
                 .get("target")
                 .and_then(|v| v.as_str())
                 .map(|s| hex::decode(s).unwrap_or_default())
                 .map(|decoded| LinkTarget {
                     true_target_id: decoded.clone(),
-                    false_target_id: decoded,
+                    false_target_id: decoded.clone(),
+                    generated_target_id: Some(decoded),
+                });
+
+            let context_tool = link_data
+                .get("context_tool")
+                .and_then(|v| v.as_object())
+                .map(|tool_data| {
+                    let required_fields: Vec<String> = tool_data
+                        .get("required_fields")
+                        .and_then(|fields| fields.as_array())
+                        .map(|fields| {
+                            fields
+                                .iter()
+                                .filter_map(|field| field.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    ContextParse::ParseFields {
+                        expected_format: tool_data.clone(),
+                        required_fields,
+                    }
+                });
+
+            let history_tool = link_data
+                .get("history_tool")
+                .and_then(|v| v.as_object())
+                .map(|tool_data| {
+                    if let Some(index) = tool_data.get("index").and_then(|v| v.as_u64()) {
+                        let field_path: Vec<String> = tool_data
+                            .get("field_path")
+                            .and_then(|fields| fields.as_array())
+                            .map(|fields| {
+                                fields
+                                    .iter()
+                                    .filter_map(|field| field.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        HistoryParse::ExtractField {
+                            index: index as usize,
+                            field_path,
+                        }
+                    } else {
+                        eprintln!("Invalid or missing 'index' in history_tool configuration.");
+                        HistoryParse::CustomProcessor {
+                            function: |_| Err("Invalid history_tool configuration".to_string()),
+                        }
+                    }
                 });
 
             links.insert(
@@ -1469,6 +1521,9 @@ fn build_links(
                     repetitions,
                     context,
                     target,
+                    description,
+                    history_tool,
+                    context_tool,
                 },
             );
         }

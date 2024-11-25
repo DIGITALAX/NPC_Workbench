@@ -3,9 +3,9 @@ mod tests {
     use tokio::time::Duration;
     use ethers::types::{Chain, H160};
     use npc_workbench::{
-        adapters::nodes::{
-            agents::{LLMModel, Objective}, connectors::off_chain::ConnectorType, listeners::{ListenerType, OffChainCheck}
-        },
+        adapters::{links::{evaluations::{EvaluationResponseType, EvaluationType}, listeners::ListenerType}, nodes::{
+            agents::{LLMModel, Objective}, connectors::off_chain::ConnectorType, 
+        }},
         ipfs::IPFSProvider,
         nibble::Nibble,
     };
@@ -364,6 +364,7 @@ mod tests {
                             }
                         })),
                         &address,
+                        None
                     );
                 
                     match result {
@@ -397,6 +398,361 @@ mod tests {
                     false,
                 );
 
+                // Subflow connected to Timer Listener for posting on Lens
+                let off_chain_check_notifications = nibble.add_offchain_connector( "LensNotifications",
+                ConnectorType::GraphQL {
+                    query: r#"
+                        query notifications($request: NotificationRequest) {
+                            notifications(request: $request) {
+                                items {
+                                    ... on ReactionNotification {
+                                        id
+                                        reactions {
+                                            profile {
+                                                id
+                                                name
+                                                bio
+                                            }
+                                            reactions {
+                                                reactionType
+                                            }
+                                        }
+                                    }
+                                    ... on CommentNotification {
+                                        id
+                                        comment {
+                                            id
+                                            createdAt
+                                            content
+                                            by {
+                                                id
+                                                name
+                                            }
+                                        }
+                                    }
+                                    ... on QuoteNotification {
+                                        id
+                                        quote {
+                                            id
+                                            createdAt
+                                            content
+                                            by {
+                                                id
+                                                name
+                                            }
+                                        }
+                                    }
+                                    ... on FollowNotification {
+                                        id
+                                        followers {
+                                            id
+                                            handle
+                                            metadata
+                                        }
+                                    }  
+                                    ... on MentionNotification {
+                                        id
+                                        publication {
+                                           ... on Post {
+                                                 id
+                                                 createdAt
+                                                 content
+                                                 by {
+                                                  id
+                                                  name
+                                                }
+                                            }
+                                            ... on Comment {
+                                                 id
+                                                 createdAt
+                                                 content
+                                                 by {
+                                                  id
+                                                  name
+                                                }
+                                            }
+                                            ... on Quote {
+                                                 id
+                                                 createdAt
+                                                 content
+                                                 by {
+                                                  id
+                                                  name
+                                                }
+                                          }
+                                        }
+                                    }                                                              
+                                }
+                                pageInfo {
+                                    next
+                                    prev
+                                }
+                            }
+                        }
+                    "#.to_string(),
+                    variables: Some(
+                        [
+                            ("request.profileId".to_string(), "{{profileId}}".to_string()),
+                            ("request.limit".to_string(), "{{limit}}".to_string()),
+                            ("request.cursor".to_string(), "{{cursor}}".to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                },
+                "https://api-v2.lens.dev",
+                true,
+                Method::POST,
+                Some({
+                    let mut headers = HashMap::new();
+                    headers.insert("Content-Type".to_string(), "application/json".to_string());
+                    headers
+                }),
+                None, 
+                None, 
+                Some(Arc::new(|response: Value| -> Result<Value, Box<dyn Error + Send + Sync>> {
+                    if let Some(data) = response["data"]["notifications"].as_object() {
+                        Ok(Value::Object(data.clone()))
+                    } else {
+                        Err("Error processing notifications response".into())
+                    }
+                })),
+                &H160::from_str("0x0000000000000000000000000000000000000001").unwrap(),None
+            );
+
+            let agent_notification_judge = nibble.add_evaluation("AgentEvaluationNotifications",  EvaluationType::AgentJudge {
+                agent_id: "MemeMaster".into(),
+                prompt: "Based on the notifications, decide which one I should respond to. In your response give me the entire object back of the chosen notification.".to_string(),
+                response_type: EvaluationResponseType::Dynamic,
+            }, false);
+
+            // Then I would in the workflow use the meme master agent to right a response/reply "Then craft back the response in your role to increase the lore of the meme. Make your response in JSON format with a field of message and the response, and a field of id where you put the comment/quote ID of the message that the response is for. If I am replying to a follow by someone or creating a new publication/post then dont include anything in the field of id since the message will be a new publication.". 
+
+            let lens_create_post_connector = nibble.add_offchain_connector(
+                "LensCreatePost",
+                ConnectorType::GraphQL {
+                    query: r#"
+                        mutation createOnchainPostTypedData($request: CreatePostTypedDataRequest!) {
+                            createOnchainPostTypedData(request: $request) {
+                                id
+                                expiresAt
+                                typedData {
+                                    types {
+                                        Post {
+                                            name
+                                            type
+                                        }
+                                    }
+                                    domain {
+                                        name
+                                        chainId
+                                        version
+                                        verifyingContract
+                                    }
+                                    value {
+                                        nonce
+                                        deadline
+                                        profileId
+                                        contentURI
+                                        actionModules
+                                        actionModulesInitDatas
+                                        referenceModule
+                                        referenceModuleInitData
+                                    }
+                                }
+                            }
+                        }
+                    "#.to_string(),
+                    variables: Some(
+                        [
+                            ("request.contentURI".to_string(), "{{contentURI}}".to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                },
+                "https://api-v2.lens.dev",
+                true, 
+                Method::POST,
+                Some({
+                    let mut headers = HashMap::new();
+                    headers.insert("Content-Type".to_string(), "application/json".to_string());
+                    headers
+                }),
+                None, 
+                None, 
+                Some(Arc::new(|response: Value| -> Result<Value, Box<dyn Error + Send + Sync>> {
+                    if let Some(data) = response["data"]["createOnchainPostTypedData"].as_object() {
+                        Ok(Value::Object(data.clone()))
+                    } else {
+                        Err("Error processing createOnchainPostTypedData response".into())
+                    }
+                })),
+                &H160::from_str("0x0000000000000000000000000000000000000001").unwrap(),None
+            );
+            
+
+            let lens_broadcast_post_connector = nibble.add_offchain_connector(
+                "LensBroadcastPost",
+                ConnectorType::GraphQL {
+                    query: r#"
+                        mutation broadcastOnchain($request: BroadcastRequest!) {
+                            broadcastOnchain(request: $request) {
+                                ... on RelaySuccess {
+                                    txHash
+                                    txId
+                                }
+                                ... on RelayError {
+                                    reason
+                                }
+                            }
+                        }
+                    "#.to_string(),
+                    variables: Some(
+                        [
+                            ("request.id".to_string(), "{{id}}".to_string()),
+                            ("request.signature".to_string(), "{{signature}}".to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                },
+                "https://api-v2.lens.dev",
+                true, 
+                Method::POST,
+                Some({
+                    let mut headers = HashMap::new();
+                    headers.insert("Content-Type".to_string(), "application/json".to_string());
+                    headers
+                }),
+                None, 
+                None,
+                Some(Arc::new(|response: Value| -> Result<Value, Box<dyn Error + Send + Sync>> {
+                    if let Some(relay_result) = response["data"]["broadcastOnchain"].as_object() {
+                        if relay_result.contains_key("txHash") {
+                            Ok(Value::String(
+                                relay_result["txHash"]
+                                    .as_str()
+                                    .unwrap_or("Unknown Transaction Hash")
+                                    .to_string(),
+                            ))
+                        } else if let Some(reason) = relay_result["reason"].as_str() {
+                            Err(format!("Relay Error: {}", reason).into())
+                        } else {
+                            Err("Unexpected response format".into())
+                        }
+                    } else {
+                        Err("Error processing broadcastOnchain response".into())
+                    }
+                })),
+                &H160::from_str("0x0000000000000000000000000000000000000001").unwrap(),None
+            );
+
+
+            let lens_comment_onchain_connector = nibble.add_offchain_connector(
+                "LensCommentOnchain",
+                ConnectorType::GraphQL {
+                    query: r#"
+                        mutation commentOnchain($request: CommentOnchainRequest!) {
+                            commentOnchain(request: $request) {
+                                ... on RelaySuccess {
+                                    txId
+                                    txHash
+                                }
+                                ... on LensProfileManagerRelayError {
+                                    reason
+                                }
+                            }
+                        }
+                    "#.to_string(),
+                    variables: Some(
+                        [
+                            ("request.commentOn".to_string(), "{{publicationId}}".to_string()),
+                            ("request.contentURI".to_string(), "{{metadataURI}}".to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                },
+                "https://api-v2.lens.dev",
+                true, 
+                Method::POST,
+                Some({
+                    let mut headers = HashMap::new();
+                    headers.insert("Content-Type".to_string(), "application/json".to_string());
+                    headers
+                }),
+                None, 
+                None, 
+                Some(Arc::new(|response: Value| -> Result<Value, Box<dyn Error + Send + Sync>> {
+                    if let Some(result) = response["data"]["commentOnchain"].as_object() {
+                        if let Some(tx_hash) = result["txHash"].as_str() {
+                            Ok(Value::String(tx_hash.to_string()))
+                        } else if let Some(reason) = result["reason"].as_str() {
+                            Err(format!("Lens Comment Error: {}", reason).into())
+                        } else {
+                            Err("Unexpected response format".into())
+                        }
+                    } else {
+                        Err("Error processing commentOnchain response".into())
+                    }
+                })),
+                &H160::from_str("0x0000000000000000000000000000000000000001").unwrap(),None
+            );
+            
+
+            let lens_quote_onchain_connector = nibble.add_offchain_connector(
+                "LensQuoteOnchain",
+                ConnectorType::GraphQL {
+                    query: r#"
+                        mutation quoteOnchain($request: QuoteOnchainRequest!) {
+                            quoteOnchain(request: $request) {
+                                ... on RelaySuccess {
+                                    txId
+                                    txHash
+                                }
+                                ... on LensProfileManagerRelayError {
+                                    reason
+                                }
+                            }
+                        }
+                    "#.to_string(),
+                    variables: Some(
+                        [
+                            ("request.quoteOn".to_string(), "{{publicationId}}".to_string()),
+                            ("request.contentURI".to_string(), "{{metadataURI}}".to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                },
+                "https://api-v2.lens.dev",
+                true, 
+                Method::POST,
+                Some({
+                    let mut headers = HashMap::new();
+                    headers.insert("Content-Type".to_string(), "application/json".to_string());
+                    headers
+                }),
+                None, 
+                None, 
+                Some(Arc::new(|response: Value| -> Result<Value, Box<dyn Error + Send + Sync>> {
+                    if let Some(result) = response["data"]["quoteOnchain"].as_object() {
+                        if let Some(tx_hash) = result["txHash"].as_str() {
+                            Ok(Value::String(tx_hash.to_string()))
+                        } else if let Some(reason) = result["reason"].as_str() {
+                            Err(format!("Lens Quote Error: {}", reason).into())
+                        } else {
+                            Err("Unexpected response format".into())
+                        }
+                    } else {
+                        Err("Error processing quoteOnchain response".into())
+                    }
+                })),
+                &H160::from_str("0x0000000000000000000000000000000000000001").unwrap(),None
+            );
+            
+            
             }
             Err(e) => {
                 eprintln!("Error al crear objeto: {:?}", e);

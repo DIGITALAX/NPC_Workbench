@@ -1,9 +1,15 @@
-use crate::{nibble::Adaptable, utils::generate_unique_id};
+use crate::{
+    nibble::Adaptable,
+    tools::history::HistoryParse,
+    utils::generate_unique_id,
+    workflow::{SubflowManager, Workflow},
+};
 use core::fmt;
 use ethers::types::H160;
 use reqwest::{Client, Method};
 use serde_json::{json, Map, Value};
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, io, sync::Arc};
+use tokio::sync::Mutex;
 
 #[derive(Clone, Debug)]
 pub enum ConnectorType {
@@ -27,6 +33,7 @@ pub struct OffChainConnector {
     pub headers: Option<HashMap<String, String>>,
     pub params: Option<HashMap<String, String>>,
     pub auth_tokens: Option<Value>,
+    pub auth_subflow: Option<Workflow>,
     pub result_processing_fn:
         Option<Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>>,
 }
@@ -61,9 +68,63 @@ impl OffChainConnector {
     pub async fn execute_offchain_connector(
         &self,
         dynamic_values: Option<Value>,
+        subflow_manager: Option<&SubflowManager>,
+        history_tool: Option<HistoryParse>,
     ) -> Result<Value, Box<dyn Error + Send + Sync>> {
         let client = Client::new();
         let mut url = self.api_url.clone();
+        let mut auth_tokens: Option<Value> = None;
+
+        if let Some(subflow) = &self.auth_subflow {
+            if let Some(manager) = subflow_manager {
+                let auth_result = manager
+                    .execute_subflow(
+                        Arc::new(Mutex::new(subflow.clone())),
+                        Some(1),
+                        false,
+                        true,
+                        None,
+                    )
+                    .await;
+
+                match auth_result {
+                    Some(Ok(execution_history)) => {
+                        println!("Auth subflow executed. History: {:?}", execution_history);
+
+                        if let Some(tool) = &history_tool {
+                            match tool.process(execution_history) {
+                                Ok(parsed_value) => {
+                                    auth_tokens = Some(parsed_value.clone());
+                                    println!(
+                                        "Auth tokens updated from history tool: {:?}",
+                                        auth_tokens
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!("Error processing history with tool: {}", e);
+                                    return Err(Box::new(io::Error::new(io::ErrorKind::Other, e)));
+                                }
+                            }
+                        } else {
+                            eprintln!("History tool not provided, auth tokens not updated.");
+                            return Err(
+                                "History tool is required for auth subflow processing".into()
+                            );
+                        }
+                    }
+                    Some(Err(e)) => {
+                        eprintln!("Auth subflow execution failed: {}", e);
+                        return Err(Box::new(io::Error::new(io::ErrorKind::Other, e)));
+                    }
+                    None => {
+                        eprintln!("Auth subflow returned no history.");
+                        return Err("Auth subflow did not return history".into());
+                    }
+                }
+            } else {
+                return Err("SubflowManager is required to execute auth subflows".into());
+            }
+        }
 
         if let Some(params) = &self.params {
             let query: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
@@ -75,6 +136,12 @@ impl OffChainConnector {
         if let Some(headers) = &self.headers {
             for (key, value) in headers {
                 request = request.header(key, value);
+            }
+        }
+
+        if let Some(auth_tokens) = auth_tokens {
+            if let Some(token) = auth_tokens.get("access_token").and_then(|t| t.as_str()) {
+                request = request.header("Authorization", format!("Bearer {}", token));
             }
         }
 
@@ -210,6 +277,7 @@ pub fn configure_new_offchain_connector(
         Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
     >,
     address: &H160,
+    auth_subflow: Option<Workflow>,
 ) -> Result<OffChainConnector, Box<dyn Error + Send + Sync>> {
     let off_chain = OffChainConnector {
         name: name.to_string(),
@@ -222,6 +290,7 @@ pub fn configure_new_offchain_connector(
         params,
         auth_tokens,
         result_processing_fn,
+        auth_subflow,
     };
     Ok(off_chain)
 }

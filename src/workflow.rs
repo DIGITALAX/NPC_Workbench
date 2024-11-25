@@ -2,6 +2,7 @@ use crate::{
     encrypt::encrypt_with_public_key,
     ipfs::IPFSClient,
     nibble::{Adapter, Nibble},
+    tools::{context::ContextParse, history::HistoryParse},
     utils::generate_unique_id,
 };
 use chrono::{DateTime, Utc};
@@ -24,6 +25,7 @@ pub struct ExecutionHistory {
     pub element_id: Vec<u8>,
     pub element_type: String,
     pub result: Option<Value>,
+    pub description: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -32,7 +34,6 @@ pub enum NodeAdapter {
     OffChainConnector,
     OnChainConnector,
     Agent,
-    Listener,
     SubFlow {
         subflow: Box<Workflow>,
         blocking: bool,
@@ -45,6 +46,7 @@ pub enum NodeAdapter {
 pub enum LinkAdapter {
     Condition,
     FHEGate,
+    Listener,
     Evaluation,
 }
 
@@ -66,6 +68,9 @@ pub struct WorkflowNode {
     pub adapter_type: NodeAdapter,
     pub context: Option<Value>,
     pub repetitions: Option<u32>,
+    pub description: Option<String>,
+    pub context_tool: Option<ContextParse>,
+    pub history_tool: Option<HistoryParse>,
 }
 
 impl WorkflowNode {
@@ -88,6 +93,7 @@ impl WorkflowNode {
 pub struct LinkTarget {
     pub true_target_id: Vec<u8>,
     pub false_target_id: Vec<u8>,
+    pub generated_target_id: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +104,9 @@ pub struct WorkflowLink {
     pub repetitions: Option<u32>,
     pub context: Option<Value>,
     pub target: Option<LinkTarget>,
+    pub description: Option<String>,
+    pub context_tool: Option<ContextParse>,
+    pub history_tool: Option<HistoryParse>,
 }
 
 impl WorkflowLink {
@@ -140,6 +149,9 @@ impl Workflow {
         adapter_type: NodeAdapter,
         repetitions: Option<u32>,
         context: Option<Value>,
+        description: Option<String>,
+        context_tool: Option<ContextParse>,
+        history_tool: Option<HistoryParse>,
     ) -> &mut Self {
         let id = generate_unique_id(&self.nibble_context.owner_wallet.address());
         self.nodes.insert(
@@ -150,6 +162,9 @@ impl Workflow {
                 adapter_type,
                 repetitions,
                 context,
+                description,
+                context_tool,
+                history_tool,
             },
         );
         self
@@ -162,6 +177,9 @@ impl Workflow {
         repetitions: Option<u32>,
         context: Option<Value>,
         target: Option<LinkTarget>,
+        description: Option<String>,
+        context_tool: Option<ContextParse>,
+        history_tool: Option<HistoryParse>,
     ) -> &mut Self {
         let id = generate_unique_id(&self.nibble_context.owner_wallet.address());
         self.links.insert(
@@ -173,6 +191,9 @@ impl Workflow {
                 repetitions,
                 context,
                 target,
+                description,
+                context_tool,
+                history_tool,
             },
         );
         self
@@ -377,12 +398,7 @@ impl Workflow {
             for element_id in self.topological_sort()? {
                 if let Some(node) = self.nodes.get(&element_id) {
                     context_data = self
-                        .process_node(
-                            &node.clone(),
-                            Some(&subflow_manager),
-                            context_data,
-                            &mut current_success,
-                        )
+                        .process_node(&node.clone(), Some(&subflow_manager), context_data)
                         .await?;
 
                     if context_data.is_none() {
@@ -540,8 +556,30 @@ impl Workflow {
         node: &WorkflowNode,
         subflow_manager: Option<&SubflowManager>,
         context_data: Option<Value>,
-        current_success: &mut bool,
     ) -> Result<Option<Value>, Box<dyn Error>> {
+        let processed_context = if let Some(context_tool) = &node.context_tool {
+            if let Some(data) = context_data {
+                match context_tool.process(data) {
+                    Ok(parsed_data) => Some(parsed_data),
+                    Err(e) => {
+                        eprintln!(
+                            "Error processing context with ContextTool for node {:?}: {}",
+                            node.id, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                eprintln!(
+                    "No context data provided to process for node {:?}.",
+                    node.id
+                );
+                None
+            }
+        } else {
+            context_data
+        };
+
         match node.adapter_type.clone() {
             NodeAdapter::Agent => {
                 let agent_found = self
@@ -566,6 +604,7 @@ impl Workflow {
                                 element_type: Adapter::Agent.to_string(),
                                 result: Some(Value::String(result.clone())),
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(Some(Value::String(result)))
                         }
@@ -576,6 +615,7 @@ impl Workflow {
                                 element_type: Adapter::Agent.to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -587,79 +627,7 @@ impl Workflow {
                         element_type: Adapter::Agent.to_string(),
                         result: None,
                         timestamp: chrono::Utc::now(),
-                    });
-                    Ok(None)
-                }
-            }
-            NodeAdapter::Listener => {
-                println!("Waiting on Listener: {:?}", node.id);
-
-                let listener_found = self
-                    .nibble_context
-                    .listeners
-                    .iter()
-                    .find(|listener| listener.id == *node.adapter_id);
-
-                if let Some(listener) = listener_found {
-                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-
-                    let repetitions = node
-                        .context
-                        .as_ref()
-                        .and_then(|v| v.as_number().and_then(|n| n.as_u64()));
-
-                    let listener_task = tokio::spawn({
-                        let listener = listener.clone();
-                        async move {
-                            if let Err(e) = listener.listen_and_trigger(tx, repetitions).await {
-                                eprintln!("Error in listener: {:?}", e);
-                            }
-                        }
-                    });
-
-                    let result = match rx.recv().await {
-                        Some(event_data) => {
-                            println!("Listener triggered with data: {:?}", event_data);
-                            self.execution_history.push(ExecutionHistory {
-                                element_id: node.id.clone(),
-                                element_type: Adapter::Listener.to_string(),
-                                result: Some(event_data.clone()),
-                                timestamp: chrono::Utc::now(),
-                            });
-                            Some(event_data)
-                        }
-                        None => {
-                            eprintln!("Listener did not produce any result.");
-                            *current_success = false;
-                            self.execution_history.push(ExecutionHistory {
-                                element_id: node.id.clone(),
-                                element_type: Adapter::Listener.to_string(),
-                                result: None,
-                                timestamp: chrono::Utc::now(),
-                            });
-                            None
-                        }
-                    };
-
-                    if let Err(e) = listener_task.await {
-                        eprintln!("Listener task failed: {:?}", e);
-                        self.execution_history.push(ExecutionHistory {
-                            element_id: node.id.clone(),
-                            element_type: Adapter::Listener.to_string(),
-                            result: None,
-                            timestamp: chrono::Utc::now(),
-                        });
-                    }
-
-                    Ok(result)
-                } else {
-                    eprintln!("Listener not found for ID: {:?}", node.adapter_id);
-                    *current_success = false;
-                    self.execution_history.push(ExecutionHistory {
-                        element_id: node.id.clone(),
-                        element_type: Adapter::Listener.to_string(),
-                        result: None,
-                        timestamp: chrono::Utc::now(),
+                        description: None,
                     });
                     Ok(None)
                 }
@@ -696,6 +664,7 @@ impl Workflow {
                                                 element_type: Adapter::OnChainConnector.to_string(),
                                                 result: None,
                                                 timestamp: chrono::Utc::now(),
+                                                description: None,
                                             });
                                             None
                                         }
@@ -705,6 +674,7 @@ impl Workflow {
                                             element_type: Adapter::OnChainConnector.to_string(),
                                             result: None,
                                             timestamp: chrono::Utc::now(),
+                                            description: None,
                                         });
                                         None
                                     }
@@ -763,6 +733,7 @@ impl Workflow {
                                 element_type: Adapter::OnChainConnector.to_string(),
                                 result: Some(receipt_value.clone()),
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(Some(receipt_value))
                         }
@@ -773,6 +744,7 @@ impl Workflow {
                                 element_type: Adapter::OnChainConnector.to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -784,6 +756,7 @@ impl Workflow {
                         element_type: Adapter::OnChainConnector.to_string(),
                         result: None,
                         timestamp: chrono::Utc::now(),
+                        description: None,
                     });
                     Ok(None)
                 }
@@ -800,7 +773,12 @@ impl Workflow {
                     println!("Executing OffChainConnector: {:?}", node.id);
 
                     match offchain_connector
-                        .execute_offchain_connector(context_data.clone())
+                        .execute_offchain_connector(
+                            processed_context.clone(),
+                            subflow_manager,
+                            node.history_tool.clone(),
+                            
+                        )
                         .await
                     {
                         Ok(response) => {
@@ -810,6 +788,7 @@ impl Workflow {
                                 element_type: Adapter::OffChainConnector.to_string(),
                                 result: Some(response.clone()),
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(Some(response))
                         }
@@ -820,6 +799,7 @@ impl Workflow {
                                 element_type: Adapter::OffChainConnector.to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -831,6 +811,7 @@ impl Workflow {
                         element_type: Adapter::OffChainConnector.to_string(),
                         result: None,
                         timestamp: chrono::Utc::now(),
+                        description: None,
                     });
                     Ok(None)
                 }
@@ -869,6 +850,7 @@ impl Workflow {
                                 element_type: "Subflow".to_string(),
                                 result: Some(Value::String("Blocking SubFlow Success".to_string())),
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             self.execution_history.extend(history);
                             Ok(Some(Value::String("Blocking SubFlow Success".to_string())))
@@ -880,6 +862,7 @@ impl Workflow {
                                 element_type: "Subflow".to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -889,6 +872,7 @@ impl Workflow {
                                 element_type: "Subflow".to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -924,6 +908,7 @@ impl Workflow {
                                         "Blocking SubFlow Success".to_string(),
                                     )),
                                     timestamp: chrono::Utc::now(),
+                                    description: None,
                                 });
                                 self.execution_history.extend(history);
                             } else {
@@ -932,6 +917,7 @@ impl Workflow {
                                     element_type: "Subflow".to_string(),
                                     result: None,
                                     timestamp: chrono::Utc::now(),
+                                    description: None,
                                 });
                                 eprintln!("Failed to receive history from non-blocking SubFlow.");
                                 return Ok(None);
@@ -943,6 +929,7 @@ impl Workflow {
                                 element_type: "Subflow".to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             eprintln!("No SubflowManager available.");
                             return Ok(None);
@@ -962,6 +949,29 @@ impl Workflow {
         context_data: Option<Value>,
         current_success: &mut bool,
     ) -> Result<Option<Value>, Box<dyn Error>> {
+        let processed_context = if let Some(context_tool) = &link.context_tool {
+            if let Some(data) = context_data {
+                match context_tool.process(data) {
+                    Ok(parsed_data) => Some(parsed_data),
+                    Err(e) => {
+                        eprintln!(
+                            "Error processing context with ContextTool for node {:?}: {}",
+                            link.id, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                eprintln!(
+                    "No context data provided to process for node {:?}.",
+                    link.id
+                );
+                None
+            }
+        } else {
+            context_data
+        };
+
         match link.adapter_type {
             LinkAdapter::Condition => {
                 println!("Processing Condition: {:?}", link.id);
@@ -974,7 +984,7 @@ impl Workflow {
 
                 if let Some(condition) = condition_found {
                     match condition
-                        .check_condition(&self.nibble_context, context_data.clone())
+                        .check_condition(&self.nibble_context, processed_context.clone())
                         .await
                     {
                         Ok(response) => {
@@ -985,6 +995,7 @@ impl Workflow {
                                 element_type: Adapter::Condition.to_string(),
                                 result: Some(Value::String("Condition Success".to_string())),
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
 
                             if let Some(target) = &link.target {
@@ -1003,8 +1014,7 @@ impl Workflow {
                                         .process_node(
                                             &node.clone(),
                                             None,
-                                            context_data.clone(),
-                                            current_success,
+                                            processed_context.clone(),
                                         )
                                         .await?;
                                     self.execution_history.push(ExecutionHistory {
@@ -1012,6 +1022,7 @@ impl Workflow {
                                         element_type: Adapter::Condition.to_string(),
                                         result: result.clone(),
                                         timestamp: chrono::Utc::now(),
+                                        description: None,
                                     });
 
                                     Ok(result)
@@ -1025,6 +1036,7 @@ impl Workflow {
                                         element_type: Adapter::Condition.to_string(),
                                         result: None,
                                         timestamp: chrono::Utc::now(),
+                                        description: None,
                                     });
                                     Ok(None)
                                 }
@@ -1038,6 +1050,7 @@ impl Workflow {
                                             "Condition Success".to_string(),
                                         )),
                                         timestamp: chrono::Utc::now(),
+                                        description: None,
                                     });
                                     Ok(Some(Value::String("Condition Success".to_string())))
                                 } else {
@@ -1047,6 +1060,7 @@ impl Workflow {
                                         element_type: Adapter::Condition.to_string(),
                                         result: None,
                                         timestamp: chrono::Utc::now(),
+                                        description: None,
                                     });
                                     Ok(None)
                                 }
@@ -1060,6 +1074,7 @@ impl Workflow {
                                 element_type: Adapter::Condition.to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -1072,6 +1087,84 @@ impl Workflow {
                         element_type: Adapter::Condition.to_string(),
                         result: None,
                         timestamp: chrono::Utc::now(),
+                        description: None,
+                    });
+                    Ok(None)
+                }
+            }
+            LinkAdapter::Listener => {
+                println!("Waiting on Listener: {:?}", link.id);
+
+                let listener_found = self
+                    .nibble_context
+                    .listeners
+                    .iter()
+                    .find(|listener| listener.id == *link.adapter_id);
+
+                if let Some(listener) = listener_found {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+                    let repetitions = link
+                        .context
+                        .as_ref()
+                        .and_then(|v| v.as_number().and_then(|n| n.as_u64()));
+
+                    let listener_task = tokio::spawn({
+                        let listener = listener.clone();
+                        async move {
+                            if let Err(e) = listener.listen_and_trigger(tx, repetitions).await {
+                                eprintln!("Error in listener: {:?}", e);
+                            }
+                        }
+                    });
+
+                    let result = match rx.recv().await {
+                        Some(event_data) => {
+                            println!("Listener triggered with data: {:?}", event_data);
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: link.id.clone(),
+                                element_type: Adapter::Listener.to_string(),
+                                result: Some(event_data.clone()),
+                                timestamp: chrono::Utc::now(),
+                                description: None,
+                            });
+                            Some(event_data)
+                        }
+                        None => {
+                            eprintln!("Listener did not produce any result.");
+                            *current_success = false;
+                            self.execution_history.push(ExecutionHistory {
+                                element_id: link.id.clone(),
+                                element_type: Adapter::Listener.to_string(),
+                                result: None,
+                                timestamp: chrono::Utc::now(),
+                                description: None,
+                            });
+                            None
+                        }
+                    };
+
+                    if let Err(e) = listener_task.await {
+                        eprintln!("Listener task failed: {:?}", e);
+                        self.execution_history.push(ExecutionHistory {
+                            element_id: link.id.clone(),
+                            element_type: Adapter::Listener.to_string(),
+                            result: None,
+                            timestamp: chrono::Utc::now(),
+                            description: None,
+                        });
+                    }
+
+                    Ok(result)
+                } else {
+                    eprintln!("Listener not found for ID: {:?}", link.adapter_id);
+                    *current_success = false;
+                    self.execution_history.push(ExecutionHistory {
+                        element_id: link.id.clone(),
+                        element_type: Adapter::Listener.to_string(),
+                        result: None,
+                        timestamp: chrono::Utc::now(),
+                        description: None,
                     });
                     Ok(None)
                 }
@@ -1085,7 +1178,7 @@ impl Workflow {
                     .find(|fhe_gate| fhe_gate.id == *link.adapter_id);
 
                 if let Some(fhe_gate) = fhe_gate_found {
-                    let encrypted_value_option = if let Some(v) = context_data.clone() {
+                    let encrypted_value_option = if let Some(v) = processed_context.clone() {
                         if let Some(s) = v.as_str() {
                             hex::decode(s).ok()
                         } else {
@@ -1131,8 +1224,7 @@ impl Workflow {
                                                     .process_node(
                                                         &node.clone(),
                                                         None,
-                                                        context_data.clone(),
-                                                        current_success,
+                                                        processed_context.clone(),
                                                     )
                                                     .await?;
                                                 self.execution_history.push(ExecutionHistory {
@@ -1140,6 +1232,7 @@ impl Workflow {
                                                     element_type: Adapter::FHEGate.to_string(),
                                                     result: result.clone(),
                                                     timestamp: chrono::Utc::now(),
+                                                    description: None,
                                                 });
 
                                                 Ok(result)
@@ -1154,6 +1247,7 @@ impl Workflow {
                                                     element_type: Adapter::FHEGate.to_string(),
                                                     result: None,
                                                     timestamp: chrono::Utc::now(),
+                                                    description: None,
                                                 });
                                                 Ok(None)
                                             }
@@ -1168,6 +1262,7 @@ impl Workflow {
                                                         "FHE Gate Success".to_string(),
                                                     )),
                                                     timestamp: chrono::Utc::now(),
+                                                    description: None,
                                                 });
                                                 Ok(Some(Value::String(
                                                     "FHE Gate Success".to_string(),
@@ -1180,6 +1275,7 @@ impl Workflow {
                                                     element_type: Adapter::FHEGate.to_string(),
                                                     result: None,
                                                     timestamp: chrono::Utc::now(),
+                                                    description: None,
                                                 });
                                                 Ok(None)
                                             }
@@ -1193,6 +1289,7 @@ impl Workflow {
                                             element_type: Adapter::FHEGate.to_string(),
                                             result: None,
                                             timestamp: chrono::Utc::now(),
+                                            description: None,
                                         });
                                         Ok(None)
                                     }
@@ -1203,6 +1300,7 @@ impl Workflow {
                                     element_type: Adapter::FHEGate.to_string(),
                                     result: None,
                                     timestamp: chrono::Utc::now(),
+                                    description: None,
                                 });
                                 Ok(None)
                             }
@@ -1219,6 +1317,7 @@ impl Workflow {
                                 element_type: Adapter::FHEGate.to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -1230,6 +1329,7 @@ impl Workflow {
                         element_type: Adapter::FHEGate.to_string(),
                         result: None,
                         timestamp: chrono::Utc::now(),
+                        description: None,
                     });
                     Ok(None)
                 }
@@ -1281,9 +1381,10 @@ impl Workflow {
                         .map(|id| {
                             if let Some(node) = self.nodes.get(id) {
                                 format!(
-                                    "Node ID: {}, Adapter Type: {:?}",
+                                    "Node ID: {}, Adapter Type: {:?}, Description: {:?}",
                                     hex::encode(&node.id),
-                                    node.adapter_type
+                                    node.adapter_type,
+                                    node.description
                                 )
                             } else if let Some(link) = self.links.get(id) {
                                 format!(
@@ -1301,6 +1402,7 @@ impl Workflow {
                     match evaluation
                         .check_evaluation(
                             self.nibble_context.agents.clone(),
+                            processed_context.clone(),
                             Some(&flow_previous_context),
                             Some(&flow_next_steps),
                             interaction_id,
@@ -1309,11 +1411,19 @@ impl Workflow {
                     {
                         Ok(response) => {
                             if let Some(target) = &link.target {
-                                let next_node_id = if response {
-                                    &target.true_target_id
+                                let mut next_node_id: &Vec<u8> = &Vec::new();
+
+                                if let Some(response_value) = response.as_bool() {
+                                    next_node_id = if response_value {
+                                        &target.true_target_id
+                                    } else {
+                                        &target.false_target_id
+                                    };
                                 } else {
-                                    &target.false_target_id
-                                };
+                                    if let Some(generated_target) = &target.generated_target_id {
+                                        next_node_id = &generated_target;
+                                    }
+                                }
 
                                 if let Some(node) = self.nodes.get(next_node_id) {
                                     println!(
@@ -1324,8 +1434,7 @@ impl Workflow {
                                         .process_node(
                                             &node.clone(),
                                             None,
-                                            context_data.clone(),
-                                            current_success,
+                                            processed_context.clone(),
                                         )
                                         .await?;
 
@@ -1334,6 +1443,7 @@ impl Workflow {
                                         element_type: Adapter::Evaluation.to_string(),
                                         result: result.clone(),
                                         timestamp: chrono::Utc::now(),
+                                        description: None,
                                     });
 
                                     Ok(result)
@@ -1347,30 +1457,21 @@ impl Workflow {
                                         element_type: Adapter::Evaluation.to_string(),
                                         result: None,
                                         timestamp: chrono::Utc::now(),
+                                        description: None,
                                     });
                                     Ok(None)
                                 }
                             } else {
-                                if response {
-                                    println!("Evaluation passed, continuing flow.");
-                                    self.execution_history.push(ExecutionHistory {
-                                        element_id: link.id.clone(),
-                                        element_type: Adapter::Evaluation.to_string(),
-                                        result: context_data.clone(),
-                                        timestamp: chrono::Utc::now(),
-                                    });
+                                println!("Evaluation passed, continuing flow.");
+                                self.execution_history.push(ExecutionHistory {
+                                    element_id: link.id.clone(),
+                                    element_type: Adapter::Evaluation.to_string(),
+                                    result: processed_context.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                    description: None,
+                                });
 
-                                    Ok(context_data)
-                                } else {
-                                    println!("Evaluation failed, stopping flow.");
-                                    self.execution_history.push(ExecutionHistory {
-                                        element_id: link.id.clone(),
-                                        element_type: Adapter::Evaluation.to_string(),
-                                        result: None,
-                                        timestamp: chrono::Utc::now(),
-                                    });
-                                    Ok(None)
-                                }
+                                Ok(processed_context)
                             }
                         }
                         Err(e) => {
@@ -1380,6 +1481,7 @@ impl Workflow {
                                 element_type: Adapter::Evaluation.to_string(),
                                 result: None,
                                 timestamp: chrono::Utc::now(),
+                                description: None,
                             });
                             Ok(None)
                         }
@@ -1391,6 +1493,7 @@ impl Workflow {
                         element_type: Adapter::Evaluation.to_string(),
                         result: None,
                         timestamp: chrono::Utc::now(),
+                        description: None,
                     });
                     Ok(None)
                 }

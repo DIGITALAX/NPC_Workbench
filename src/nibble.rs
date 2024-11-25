@@ -3,7 +3,8 @@ use crate::{
         links::{
             conditions::{configure_new_condition, Condition, ConditionType},
             evaluations::{configure_new_evaluation, Evaluation, EvaluationType},
-            fhe_gates::{configure_new_gate, FHEGate},
+            fhe_gates::{configure_new_gate, FHEGate},            listeners::{configure_new_listener, Listener, ListenerType},
+
         },
         nodes::{
             agents::{self, Agent, LLMModel, Objective},
@@ -11,7 +12,6 @@ use crate::{
                 off_chain::{configure_new_offchain_connector, ConnectorType, OffChainConnector},
                 on_chain::{configure_new_onchain_connector, OnChainConnector},
             },
-            listeners::{configure_new_listener, Listener, ListenerType},
         },
     },
     constants::NIBBLE_FACTORY_CONTRACT,
@@ -408,6 +408,7 @@ impl Nibble {
             Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
         >,
         address: &H160,
+        auth_subflow: Option<Workflow>
     ) -> Result<AdapterHandle<'_, OffChainConnector>, Box<dyn Error + Send + Sync>> {
         let off_chain = configure_new_offchain_connector(
             name,
@@ -420,6 +421,7 @@ impl Nibble {
             auth_tokens,
             result_processing_fn,
             address,
+            auth_subflow
         )?;
 
         self.offchain_connectors.push(off_chain.clone());
