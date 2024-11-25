@@ -22,7 +22,10 @@ contract NibbleAccessControls is Initializable {
     function initialize(
         address nibbleFactoryAddress,
         address admin
-    ) external onlyNibbleFactory(nibbleFactoryAddress) onlyInitializing {
+    ) external onlyNibbleFactory(nibbleFactoryAddress)  {
+        if (_admin != address(0)) {
+            revert NibbleLibrary.AlreadyInitialized();
+        }
         _admin = admin;
 
         _humanWriters[admin] = true;

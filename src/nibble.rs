@@ -20,8 +20,9 @@ use crate::{
     utils::{generate_unique_id, load_nibble_from_subgraph, load_workflow_from_subgraph},
     workflow::Workflow,
 };
+use abi::{decode,  ParamType};
 use ethers::{
-    abi::{Abi, AbiDecode, Token, Tokenize},
+    abi::{Abi, Token, Tokenize},
     prelude::*,
     types::{Address, Eip1559TransactionRequest, NameOrAddress, U256},
 };
@@ -505,9 +506,9 @@ impl Nibble {
                 let FunctionCall { tx, .. } = call;
 
                 if let Some(tx_request) = tx.as_eip1559_ref() {
-                    let gas_price = U256::from(500_000_000_000u64);
+                    let gas_price = U256::from(50_000_000_000u64);
                     let max_priority_fee = U256::from(25_000_000_000u64);
-                    let gas_limit = U256::from(300_000);
+                    let gas_limit = U256::from(150_000);
 
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
@@ -545,8 +546,61 @@ impl Nibble {
 
                     if let Some(log) = receipt.logs.get(0) {
                         let log_data_bytes = log.data.0.clone();
-                        let return_values: ([Address; 9], Vec<u8>, U256) =
-                            <([Address; 9], Vec<u8>, U256)>::decode(&log_data_bytes)?;
+                        let decoded: Vec<Token> = decode(
+                            &[
+                                ParamType::Array(Box::new(ParamType::Address)),
+                                ParamType::Bytes,
+                                ParamType::Uint(256),
+                            ],
+                            &log_data_bytes,
+                        )?;
+
+                        let return_values: ([Address; 9], Vec<u8>, U256) = {
+                            let addresses: [Address; 9] = decoded
+                                .get(0)
+                                .and_then(|token| {
+                                    if let Token::Array(array) = token {
+                                        let address_vec: Vec<Address> = array
+                                            .iter()
+                                            .filter_map(|t| {
+                                                if let Token::Address(addr) = t {
+                                                    Some(*addr)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect();
+                                        address_vec.try_into().ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .ok_or_else(|| "Invalid address array")?;
+
+                            let id: Vec<u8> = decoded
+                                .get(1)
+                                .and_then(|token| {
+                                    if let Token::Bytes(bytes) = token {
+                                        Some(bytes.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .ok_or_else(|| "Invalid ID bytes")?;
+
+                            let count: U256 = decoded
+                                .get(2)
+                                .and_then(|token| {
+                                    if let Token::Uint(count) = token {
+                                        Some(*count)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .ok_or_else(|| "Invalid count")?;
+
+                            (addresses, id, count)
+                        };
 
                         self.contracts = vec![
                             ContractInfo {

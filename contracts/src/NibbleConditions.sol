@@ -39,7 +39,10 @@ contract NibbleConditions is Initializable {
         address nibbleFactoryAddress,
         address nibbleAccessControlsAddress,
         address nibbleStorageAddress
-    ) external onlyNibbleFactory(nibbleFactoryAddress) onlyInitializing {
+    ) external onlyNibbleFactory(nibbleFactoryAddress) {
+        if (address(nibbleAccessControls) != address(0)) {
+            revert NibbleLibrary.AlreadyInitialized();
+        }
         nibbleAccessControls = NibbleAccessControls(
             nibbleAccessControlsAddress
         );

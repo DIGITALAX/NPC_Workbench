@@ -4,7 +4,7 @@ While you can mix and match adapters, nodes, and links to create virtually any w
 
 Why meme agents? Because memes are more than jokes—they’re cultural transactions, carrying the weight of ideas, identity, influence and are now actual **tokenized currency**. 
 
-If **media control equals market participation**, then enabling access to markets starts with owning the mechanisms that drive your interactions. Without this, power consolidates unchecked, eroding the freedom to choose what you believe, how you live, and who you trust.
+If **media control equals market participation**, then enabling access to markets starts with owning the mechanisms that drive your interactions. 
 
-![AgentMeme](https://digitalax.infura-ipfs.io/ipfs/)
+![AgentMeme](https://digitalax.infura-ipfs.io/ipfs/QmYWz4PVyoxrTyhjKGLJWTUYeJeR7snwEN57Bit7AQGHHk)
 

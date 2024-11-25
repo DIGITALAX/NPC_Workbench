@@ -53,7 +53,10 @@ contract NibbleStorage is Initializable {
         address nibbleEvaluationsAddress,
         address nibbleFHEGatesAddress,
         address nibbleWorkflowsAddress
-    ) external onlyNibbleFactory(nibbleFactoryAddress) onlyInitializing {
+    ) external onlyNibbleFactory(nibbleFactoryAddress) {
+        if (address(nibbleAccessControls) != address(0)) {
+            revert NibbleLibrary.AlreadyInitialized();
+        }
         nibbleConditions = NibbleConditions(nibbleConditionsAddress);
         nibbleListeners = NibbleListeners(nibbleListenersAddress);
         nibbleConnectors = NibbleConnectors(nibbleConnectorsAddress);

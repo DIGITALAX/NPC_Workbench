@@ -3,10 +3,19 @@ pragma solidity ^0.8.20;
 
 contract NibbleLibrary {
     error InvalidInitializer();
+    error AlreadyInitialized();
     error OnlyAdmin();
     error AdminCantBeZero();
     error InvalidRole();
     error InvalidLengths();
+    error AccessControlInitializationFailed();
+    error StorageInitializationFailed();
+    error ConditionsInitializationFailed();
+    error ListenersInitializationFailed();
+    error EvaluationsInitializationFailed();
+    error ConnectorsInitializationFailed();
+    error FHEGatesInitializationFailed();
+    error AgentsInitializationFailed();
 
     struct Nibble {
         address storageContract;

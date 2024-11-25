@@ -78,52 +78,106 @@ contract NibbleFactory {
         address _newAccessControls = Clones.clone(accessControlsImplementation);
         address _newWorkflows = Clones.clone(workflowsImplementation);
 
-        NibbleAccessControls(_newAccessControls).initialize(
-            msg.sender,
-            address(this)
+        (bool success, ) = _newAccessControls.call(
+            abi.encodeWithSignature(
+                "initialize(address,address)",
+                address(this),
+                msg.sender
+            )
         );
-        NibbleStorage(_newStorage).initialize(
-            address(this),
-            _newAccessControls,
-            _newConditions,
-            _newListeners,
-            _newConnectors,
-            _newAgents,
-            _newEvaluations,
-            _newFHEGates,
-            _newWorkflows
-        );
+        if (!success) {
+            revert NibbleLibrary.AccessControlInitializationFailed();
+        }
 
-        NibbleConditions(_newConditions).initialize(
-            address(this),
-            _newAccessControls,
-            _newStorage
+        (success, ) = _newStorage.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address,address,address,address,address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newConditions,
+                _newListeners,
+                _newConnectors,
+                _newAgents,
+                _newEvaluations,
+                _newFHEGates,
+                _newWorkflows
+            )
         );
-        NibbleListeners(_newListeners).initialize(
-            address(this),
-            _newAccessControls,
-            _newStorage
+        if (!success) {
+            revert NibbleLibrary.StorageInitializationFailed();
+        }
+
+        (success, ) = _newConditions.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newStorage
+            )
         );
-        NibbleEvaluations(_newEvaluations).initialize(
-            address(this),
-            _newAccessControls,
-            _newStorage
+        if (!success) {
+            revert NibbleLibrary.ConditionsInitializationFailed();
+        }
+
+        (success, ) = _newListeners.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newStorage
+            )
         );
-        NibbleConnectors(_newConnectors).initialize(
-            address(this),
-            _newAccessControls,
-            _newStorage
+        if (!success) {
+            revert NibbleLibrary.ListenersInitializationFailed();
+        }
+
+        (success, ) = _newEvaluations.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newStorage
+            )
         );
-        NibbleFHEGates(_newFHEGates).initialize(
-            address(this),
-            _newAccessControls,
-            _newStorage
+        if (!success) {
+            revert NibbleLibrary.EvaluationsInitializationFailed();
+        }
+
+        (success, ) = _newConnectors.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newStorage
+            )
         );
-        NibbleAgents(_newAgents).initialize(
-            address(this),
-            _newAccessControls,
-            _newStorage
+        if (!success) {
+            revert NibbleLibrary.ConnectorsInitializationFailed();
+        }
+
+        (success, ) = _newFHEGates.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newStorage
+            )
         );
+        if (!success) {
+            revert NibbleLibrary.FHEGatesInitializationFailed();
+        }
+
+        (success, ) = _newAgents.call(
+            abi.encodeWithSignature(
+                "initialize(address,address,address)",
+                address(this),
+                _newAccessControls,
+                _newStorage
+            )
+        );
+        if (!success) {
+            revert NibbleLibrary.AgentsInitializationFailed();
+        }
 
         count++;
         bytes memory _id = _generateRandomId(

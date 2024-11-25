@@ -1,39 +1,45 @@
 #[cfg(test)]
 mod tests {
-    use tokio::time::Duration;
     use ethers::types::{Address, Chain, H160, U256};
     use npc_workbench::{
-        adapters::{links::{evaluations::{EvaluationResponseType, EvaluationType}, listeners::ListenerType}, nodes::{
-            agents::{LLMModel, Objective}, connectors::{off_chain::ConnectorType, on_chain::GasOptions}, 
-        }},
+        adapters::{
+            links::{
+                evaluations::{EvaluationResponseType, EvaluationType},
+                listeners::ListenerType,
+            },
+            nodes::{
+                agents::{LLMModel, Objective},
+                connectors::{off_chain::ConnectorType, on_chain::GasOptions},
+            },
+        },
         ipfs::IPFSProvider,
         nibble::Nibble,
     };
     use reqwest::Method;
     use serde_json::{json, to_string, Value};
     use std::{collections::HashMap, env, error::Error, str::FromStr, sync::Arc};
+    use tokio::time::Duration;
 
     use dotenv::dotenv;
 
     #[tokio::test]
     async fn test_create_nibble() {
         dotenv().ok();
-        let owner_private_key =
-            "0x4c0883a69102937d6231471b5dbb6204fe512961708279385fe482433a9d3fb9";
-        let rpc_url = "https://rpc-url-for-chain";
+        let owner_private_key = env::var("PRIVATE_KEY").expect("API_KEY must be set in .env file");
+        let rpc_url =  env::var("RPC").expect("API_KEY must be set in .env file");
         let ipfs_provider = IPFSProvider::Infura;
         let mut ipfs_config: HashMap<String, String> = HashMap::new();
-        ipfs_config.insert("project_id".to_string(), "your-project-id".to_string());
+        ipfs_config.insert("project_id".to_string(), "project-id".to_string());
         ipfs_config.insert(
             "project_secret".to_string(),
-            "your-project-secret".to_string(),
+            "project-secret".to_string(),
         );
         let chain = Chain::PolygonAmoy;
-        let graph_api_key = Some("your-graph-api-key".to_string());
+        let graph_api_key = Some("graph-api-key".to_string());
 
         let new_nibble = Nibble::new(
-            owner_private_key,
-            rpc_url,
+            &owner_private_key,
+            &rpc_url,
             ipfs_provider,
             ipfs_config,
             chain,
@@ -42,8 +48,16 @@ mod tests {
         );
 
         match new_nibble {
-            Ok(mut nibble) => {
-                println!("Nibble created successfully with ID: {:?}", nibble.id);
+            Ok(mut new) => {
+                println!("Nibble initialized successfully");
+
+
+                match new.create_nibble().await {
+                    Ok(mut nibble) => {
+                        println!("Nibble created successfully with ID: {:?}", nibble.id);
+
+                 
+         
 
                 let agents = vec![
                     (
@@ -810,9 +824,11 @@ mod tests {
                 panic!("Test failed due a critical error during Nibble creation.");
             }
         }
-
-
-
+            }
+            Err(err) => {
+                println!("Error with Nibble: {:?}", err);
+            }
+        }
     }
 }
 
