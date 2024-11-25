@@ -10,7 +10,7 @@ use crate::{
             agents::{Agent, LLMModel, Objective},
             connectors::{
                 off_chain::{ConnectorType, OffChainConnector},
-                on_chain::{GasOptions, OnChainConnector, OnChainTransaction},
+                on_chain::{GasOptions, OnChainConnector},
             },
         },
     },
@@ -25,15 +25,15 @@ use crate::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{DateTime, Utc};
 use ethers::{
-    abi::Token,
+    abi,
     providers::{Http, Provider},
     signers::LocalWallet,
-    types::{Address, Chain, H160, U256},
+    types::{Address, Bytes, Chain, H160, U256},
     utils::hex,
 };
 use rand::Rng;
 use reqwest::{Client, Method};
-use serde_json::{from_value, json, Map, Value};
+use serde_json::{from_str, from_value, json, to_vec, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap, convert::TryFrom, error::Error, iter::Iterator, str::FromStr, sync::Arc,
@@ -60,14 +60,6 @@ pub struct GraphNibbleResponse {
     pub contracts: Vec<ContractInfo>,
     pub count: U256,
     pub debug: bool,
-}
-
-pub fn convert_value_to_token(value: &Value) -> Result<Token, Box<dyn Error + Send + Sync>> {
-    match value {
-        Value::Number(num) if num.is_u64() => Ok(Token::Uint(U256::from(num.as_u64().unwrap()))),
-        Value::String(s) => Ok(Token::String(s.clone())),
-        _ => Err("Unsupported parameter type".into()),
-    }
 }
 
 pub fn generate_unique_id(address: &H160) -> Vec<u8> {
@@ -124,7 +116,7 @@ pub async fn load_workflow_from_subgraph(
         .await?;
 
     if res.status().is_success() {
-        let json: serde_json::Value = res.json().await?;
+        let json: Value = res.json().await?;
 
         if let Some(object) = json["data"]["nibble"].as_object() {
             let id = object
@@ -204,7 +196,7 @@ pub async fn load_nibble_from_subgraph(
         .await?;
 
     if res.status().is_success() {
-        let json: serde_json::Value = res.json().await?;
+        let json: Value = res.json().await?;
 
         if let Some(object) = json["data"]["nibble"].as_object() {
             return Ok(GraphNibbleResponse {
@@ -311,7 +303,7 @@ async fn build_agents(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
 
@@ -626,7 +618,7 @@ async fn build_conditions(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
 
@@ -729,7 +721,7 @@ async fn build_listeners(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
 
@@ -829,7 +821,7 @@ async fn build_evaluations(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
 
@@ -952,7 +944,7 @@ async fn build_fhe_gates(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
             let name = metadata
@@ -1045,7 +1037,7 @@ async fn build_onchain_connectors(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
 
@@ -1054,65 +1046,44 @@ async fn build_onchain_connectors(
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed OnChain Connector")
                 .to_string();
-
             let address = metadata
                 .get("address")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing address")?
-                .parse::<Address>()?;
+                .parse::<Address>()
+                .map(Some)?;
 
-            let transactions =
-                if let Some(tx_array) = metadata.get("transactions").and_then(|v| v.as_array()) {
-                    tx_array
-                        .iter()
-                        .filter_map(|tx| {
-                            Some(OnChainTransaction {
-                                function_signature: tx
-                                    .get("function_signature")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                params: tx
-                                    .get("params")
-                                    .and_then(|v| v.as_array())
-                                    .cloned()
-                                    .unwrap_or_else(Vec::new),
-                                chain: tx
-                                    .get("chain")
-                                    .and_then(|s| s.as_str())
-                                    .and_then(|s| s.parse::<Chain>().ok())
-                                    .unwrap_or(Chain::Mainnet),
-                                gas_options: GasOptions {
-                                    max_fee_per_gas: tx
-                                        .get("max_fee_per_gas")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<U256>().ok()),
-                                    max_priority_fee_per_gas: tx
-                                        .get("max_priority_fee_per_gas")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<U256>().ok()),
-                                    gas_limit: tx
-                                        .get("gas_limit")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<U256>().ok()),
-                                    nonce: tx
-                                        .get("nonce")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<U256>().ok()),
-                                },
-                            })
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+            let abi = metadata
+                .get("abi")
+                .and_then(|v| v.as_str())
+                .map(|abi_str| from_str::<abi::Abi>(abi_str))
+                .transpose()?;
+
+            let chain = metadata
+                .get("chain")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing chain")?
+                .parse::<Chain>()?;
+
+            let gas_options = metadata
+                .get("gas_options")
+                .map(|v| from_value::<GasOptions>(v.clone()).ok())
+                .flatten();
+
+            let bytecode = metadata
+                .get("bytecode")
+                .and_then(|v| v.as_str())
+                .map(|b| Bytes::from(hex::decode(b).unwrap_or_default()));
 
             onchain_connectors.push(OnChainConnector {
                 name,
                 id,
                 address,
                 encrypted,
-                transactions,
+                abi,
+                chain,
+                gas_options,
+                bytecode,
             });
         }
     }
@@ -1155,7 +1126,7 @@ pub async fn build_offchain_connectors(
             let mut metadata = fetch_metadata_from_ipfs(metadata_hash).await?;
 
             if encrypted {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                let metadata_bytes = to_vec(&metadata)?;
                 metadata = decrypt_with_private_key(metadata_bytes, wallet.clone())?;
             }
 

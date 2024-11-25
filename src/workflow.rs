@@ -642,8 +642,8 @@ impl Workflow {
                 if let Some(onchain_connector) = connector_found {
                     println!("Executing OnChainConnector: {:?}", node.id);
 
-                    let wallet = if let Some(context) = &node.context {
-                        if let Some(wallet_name) = context.get("agent_wallet") {
+                    let (wallet, method_name, params) = if let Some(context) = &node.context {
+                        let wallet = if let Some(wallet_name) = context.get("agent_wallet") {
                             if let Some(agent_id) = wallet_name.as_str() {
                                 let agent_wallet = self.nodes.values().find_map(|node| {
                                     if let NodeAdapter::Agent = node.adapter_type {
@@ -712,13 +712,26 @@ impl Workflow {
                             }
                         } else {
                             self.nibble_context.owner_wallet.clone()
-                        }
+                        };
+
+                        let method_name = context.get("method_name").and_then(|v| v.as_str());
+
+                        let params = context
+                            .get("params")
+                            .and_then(|v| v.as_array().map(|arr| arr.clone()));
+
+                        (wallet, method_name, params)
                     } else {
-                        self.nibble_context.owner_wallet.clone()
+                        (self.nibble_context.owner_wallet.clone(), None, None)
                     };
 
                     match onchain_connector
-                        .execute_onchain_connector(self.nibble_context.provider.clone(), wallet)
+                        .execute_onchain_connector(
+                            self.nibble_context.provider.clone(),
+                            wallet,
+                            method_name,
+                            params,
+                        )
                         .await
                     {
                         Ok(result) => {
@@ -777,7 +790,6 @@ impl Workflow {
                             processed_context.clone(),
                             subflow_manager,
                             node.history_tool.clone(),
-                            
                         )
                         .await
                     {

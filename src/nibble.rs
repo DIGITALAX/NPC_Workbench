@@ -3,14 +3,14 @@ use crate::{
         links::{
             conditions::{configure_new_condition, Condition, ConditionType},
             evaluations::{configure_new_evaluation, Evaluation, EvaluationType},
-            fhe_gates::{configure_new_gate, FHEGate},            listeners::{configure_new_listener, Listener, ListenerType},
-
+            fhe_gates::{configure_new_gate, FHEGate},
+            listeners::{configure_new_listener, Listener, ListenerType},
         },
         nodes::{
             agents::{self, Agent, LLMModel, Objective},
             connectors::{
                 off_chain::{configure_new_offchain_connector, ConnectorType, OffChainConnector},
-                on_chain::{configure_new_onchain_connector, OnChainConnector},
+                on_chain::{configure_new_onchain_connector, GasOptions, OnChainConnector},
             },
         },
     },
@@ -291,7 +291,7 @@ impl Nibble {
         &mut self,
         name: &str,
         listener_type: ListenerType,
-        encrypted: bool
+        encrypted: bool,
     ) -> Result<AdapterHandle<'_, Listener>, Box<dyn Error + Send + Sync>> {
         let listener =
             configure_new_listener(name, listener_type, encrypted, &self.owner_wallet.address())?;
@@ -377,14 +377,22 @@ impl Nibble {
     pub fn add_onchain_connector(
         &mut self,
         name: &str,
-        address: Address,
+        address: Option<Address>,
         encrypted: bool,
+        bytecode: Option<Bytes>,
+        abi: Option<abi::Abi>,
+        chain: Chain,
+        gas_options: Option<GasOptions>,
     ) -> Result<AdapterHandle<'_, OnChainConnector>, Box<dyn Error + Send + Sync>> {
         let on_chain = configure_new_onchain_connector(
             name,
             address,
             encrypted,
             &self.owner_wallet.address(),
+            bytecode,
+            abi,
+            chain,
+            gas_options,
         )?;
         self.onchain_connectors.push(on_chain.clone());
         Ok(AdapterHandle {
@@ -408,7 +416,7 @@ impl Nibble {
             Arc<dyn Fn(Value) -> Result<Value, Box<dyn Error + Send + Sync>> + Send + Sync>,
         >,
         address: &H160,
-        auth_subflow: Option<Workflow>
+        auth_subflow: Option<Workflow>,
     ) -> Result<AdapterHandle<'_, OffChainConnector>, Box<dyn Error + Send + Sync>> {
         let off_chain = configure_new_offchain_connector(
             name,
@@ -421,7 +429,7 @@ impl Nibble {
             auth_tokens,
             result_processing_fn,
             address,
-            auth_subflow
+            auth_subflow,
         )?;
 
         self.offchain_connectors.push(off_chain.clone());

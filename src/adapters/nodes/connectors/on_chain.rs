@@ -1,33 +1,28 @@
-use crate::{
-    nibble::Adaptable,
-    utils::{convert_value_to_token, generate_unique_id},
-};
+use crate::{nibble::Adaptable, utils::generate_unique_id};
 use ethers::{
     abi,
     prelude::*,
     types::{Address, Eip1559TransactionRequest, NameOrAddress, U256},
+    utils::hex,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::{error::Error, sync::Arc};
+use std::{error::Error, io, sync::Arc};
+use transaction::eip2718::TypedTransaction;
 
 #[derive(Debug, Clone)]
 pub struct OnChainConnector {
     pub name: String,
     pub id: Vec<u8>,
-    pub address: Address,
+    pub address: Option<Address>,
     pub encrypted: bool,
-    pub transactions: Vec<OnChainTransaction>,
-}
-
-#[derive(Debug, Clone)]
-pub struct OnChainTransaction {
-    pub function_signature: String,
-    pub params: Vec<Value>,
+    pub abi: Option<abi::Abi>,
+    pub bytecode: Option<Bytes>,
     pub chain: Chain,
-    pub gas_options: GasOptions,
+    pub gas_options: Option<GasOptions>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GasOptions {
     pub max_fee_per_gas: Option<U256>,
     pub max_priority_fee_per_gas: Option<U256>,
@@ -48,139 +43,81 @@ impl Default for GasOptions {
 
 pub fn configure_new_onchain_connector(
     name: &str,
-    address: Address,
+    address: Option<Address>,
     encrypted: bool,
     owner_address: &H160,
+    bytecode: Option<Bytes>,
+    abi: Option<abi::Abi>,
+    chain: Chain,
+    gas_options: Option<GasOptions>,
 ) -> Result<OnChainConnector, Box<dyn Error + Send + Sync>> {
     let on_chain = OnChainConnector {
         name: name.to_string(),
         id: generate_unique_id(owner_address),
         address,
         encrypted,
-        transactions: vec![],
+        bytecode,
+        abi,
+        chain,
+        gas_options,
     };
     Ok(on_chain)
 }
 
 impl OnChainConnector {
-    pub fn add_transaction(
-        &mut self,
-        function_signature: &str,
-        params: Vec<Value>,
-        gas_options: GasOptions,
-        chain: Chain,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.transactions.push(OnChainTransaction {
-            function_signature: function_signature.to_string(),
-            params,
-            gas_options,
-            chain,
-        });
-        Ok(())
-    }
-
-    pub async fn execute_transactions(
-        &self,
-        client: Arc<SignerMiddleware<Provider<Http>, LocalWallet>>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        for tx in &self.transactions {
-            let encoded_data = self.encode_function_call(&tx.function_signature, &tx.params)?;
-
-            let mut tx_request = Eip1559TransactionRequest::new()
-                .to(NameOrAddress::Address(self.address))
-                .data(encoded_data);
-
-            if let Some(gas_limit) = tx.gas_options.gas_limit {
-                tx_request = tx_request.gas(gas_limit);
-            }
-            if let Some(max_fee) = tx.gas_options.max_fee_per_gas {
-                tx_request = tx_request.max_fee_per_gas(max_fee);
-            }
-            if let Some(priority_fee) = tx.gas_options.max_priority_fee_per_gas {
-                tx_request = tx_request.max_priority_fee_per_gas(priority_fee);
-            }
-            if let Some(nonce) = tx.gas_options.nonce {
-                tx_request = tx_request.nonce(nonce);
-            }
-
-            let pending_tx = client.send_transaction(tx_request, None).await?;
-            let receipt = pending_tx.await?;
-
-            match receipt {
-                Some(r) => println!("Transaction executed with status: {:?}", r.status),
-                None => println!("Transaction was not mined"),
-            }
-        }
-        Ok(())
-    }
-
-    fn encode_function_call(
-        &self,
-        function_signature: &str,
-        params: &[Value],
-    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
-        let abi =
-            abi::AbiParser::default().parse_str(&format!("function {};", function_signature))?;
-        let func = abi.functions().next().ok_or("Function not found")?;
-
-        let tokens = params
-            .iter()
-            .map(|p| convert_value_to_token(p))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(func.encode_input(&tokens)?)
-    }
-
     pub fn to_json(&self) -> Map<String, Value> {
         let mut map = Map::new();
+
         map.insert("name".to_string(), Value::String(self.name.clone()));
+        map.insert("id".to_string(), Value::String(hex::encode(&self.id)));
         map.insert(
             "address".to_string(),
-            Value::String(format!("{:?}", self.address)),
+            Value::String(
+                self.address
+                    .map(|addr| format!("{:?}", addr))
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
         );
-        map.insert("public".to_string(), Value::Bool(self.encrypted));
+        map.insert("encrypted".to_string(), Value::Bool(self.encrypted));
+        map.insert(
+            "chain".to_string(),
+            Value::String(format!("{:?}", self.chain)),
+        );
 
-        let transactions: Vec<Value> = self
-            .transactions
-            .iter()
-            .map(|tx| {
-                let mut tx_map = Map::new();
-                tx_map.insert(
-                    "function_signature".to_string(),
-                    Value::String(tx.function_signature.clone()),
-                );
-                tx_map.insert(
-                    "params".to_string(),
-                    Value::Array(tx.params.iter().cloned().collect::<Vec<Value>>()),
-                );
-                let mut gas_map = Map::new();
-                if let Some(max_fee) = tx.gas_options.max_fee_per_gas {
-                    gas_map.insert(
-                        "max_fee_per_gas".to_string(),
-                        Value::String(format!("{:?}", max_fee)),
-                    );
-                }
-                if let Some(priority_fee) = tx.gas_options.max_priority_fee_per_gas {
-                    gas_map.insert(
-                        "max_priority_fee_per_gas".to_string(),
-                        Value::String(format!("{:?}", priority_fee)),
-                    );
-                }
-                if let Some(gas_limit) = tx.gas_options.gas_limit {
-                    gas_map.insert(
-                        "gas_limit".to_string(),
-                        Value::String(format!("{:?}", gas_limit)),
-                    );
-                }
-                if let Some(nonce) = tx.gas_options.nonce {
-                    gas_map.insert("nonce".to_string(), Value::String(format!("{:?}", nonce)));
-                }
-                tx_map.insert("gas_options".to_string(), Value::Object(gas_map));
-                Value::Object(tx_map)
-            })
-            .collect();
+        if let Some(abi) = &self.abi {
+            map.insert("abi".to_string(), Value::String(format!("{:?}", abi)));
+        }
 
-        map.insert("transactions".to_string(), Value::Array(transactions));
+        if let Some(bytecode) = &self.bytecode {
+            map.insert("bytecode".to_string(), Value::String(hex::encode(bytecode)));
+        }
+
+        if let Some(gas_options) = &self.gas_options {
+            let mut gas_map = Map::new();
+            if let Some(max_fee) = gas_options.max_fee_per_gas {
+                gas_map.insert(
+                    "max_fee_per_gas".to_string(),
+                    Value::String(max_fee.to_string()),
+                );
+            }
+            if let Some(max_priority_fee) = gas_options.max_priority_fee_per_gas {
+                gas_map.insert(
+                    "max_priority_fee_per_gas".to_string(),
+                    Value::String(max_priority_fee.to_string()),
+                );
+            }
+            if let Some(gas_limit) = gas_options.gas_limit {
+                gas_map.insert(
+                    "gas_limit".to_string(),
+                    Value::String(gas_limit.to_string()),
+                );
+            }
+            if let Some(nonce) = gas_options.nonce {
+                gas_map.insert("nonce".to_string(), Value::String(nonce.to_string()));
+            }
+            map.insert("gas_options".to_string(), Value::Object(gas_map));
+        }
+
         map
     }
 
@@ -188,51 +125,153 @@ impl OnChainConnector {
         &self,
         provider: Provider<Http>,
         wallet: LocalWallet,
-    ) -> Result<Option<TransactionReceipt>, Box<dyn Error + Send + Sync>> {
+        method_name: Option<&str>,
+        params: Option<Vec<Value>>,
+    ) -> Result<Option<Value>, Box<dyn Error + Send + Sync>> {
         let client = SignerMiddleware::new(provider.clone(), wallet.clone());
         let client = Arc::new(client);
 
-        for tx in &self.transactions {
-            let encoded_data = self.encode_function_call(&tx.function_signature, &tx.params)?;
+        if let Some(method) = method_name {
+            if let (Some(address), Some(abi)) = (&self.address, &self.abi) {
+                let contract = Contract::new(*address, abi.clone(), client.clone());
 
-            let mut tx_request = Eip1559TransactionRequest::new()
-                .to(NameOrAddress::Address(self.address))
-                .data(encoded_data);
+                let decoded_params: Vec<abi::Token> = params
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|param| {
+                        serde_json::from_value::<abi::Token>(param).map_err(|e| e.to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
-            if let Some(gas_limit) = tx.gas_options.gas_limit {
-                tx_request = tx_request.gas(gas_limit);
-            }
-            if let Some(max_fee) = tx.gas_options.max_fee_per_gas {
-                tx_request = tx_request.max_fee_per_gas(max_fee);
-            }
-            if let Some(priority_fee) = tx.gas_options.max_priority_fee_per_gas {
-                tx_request = tx_request.max_priority_fee_per_gas(priority_fee);
-            }
-            if let Some(nonce) = tx.gas_options.nonce {
-                tx_request = tx_request.nonce(nonce);
-            }
+                let method_call = contract.method::<_, Vec<abi::Token>>(method, decoded_params)?;
+                let tx_request = method_call.tx;
 
-            println!("Sending transaction to address: {:?}", self.address);
-            let pending_tx = client.send_transaction(tx_request, None).await?;
-            let receipt = pending_tx.await?;
+                let tx_request = if let Some(gas) = &self.gas_options {
+                    Eip1559TransactionRequest {
+                        from: Some(client.address()),
+                        to: Some(NameOrAddress::Address(*address)),
+                        gas: gas.gas_limit.or(tx_request.gas().copied()),
+                        value: tx_request.value().copied(),
+                        data: tx_request.data().cloned(),
+                        max_priority_fee_per_gas: gas
+                            .max_priority_fee_per_gas
+                            .or_else(|| Some(2_000_000_000u64.into())),
+                        max_fee_per_gas: gas
+                            .max_fee_per_gas
+                            .or_else(|| Some(100_000_000_000u64.into())),
+                        nonce: gas.nonce.or_else(|| None),
+                        chain_id: Some(self.chain.into()),
+                        ..Default::default()
+                    }
+                } else {
+                    Eip1559TransactionRequest {
+                        from: Some(client.address()),
+                        to: Some(NameOrAddress::Address(*address)),
+                        gas: tx_request.gas().copied(),
+                        value: tx_request.value().copied(),
+                        data: tx_request.data().cloned(),
+                        max_priority_fee_per_gas: Some(2_000_000_000u64.into()),
+                        max_fee_per_gas: Some(100_000_000_000u64.into()),
+                        nonce: None,
+                        chain_id: Some(self.chain.into()),
+                        ..Default::default()
+                    }
+                };
 
-            match receipt {
-                Some(r) if r.status == Some(U64::from(1)) => {
-                    println!("Transaction succeeded with hash: {:?}", r.transaction_hash);
-                    return Ok(Some(r));
+                let pending_tx = client
+                    .send_transaction(tx_request, None)
+                    .await
+                    .map_err(|e| {
+                        eprintln!("Error sending the transaction: {:?}", e);
+                        Box::<dyn Error + Send + Sync>::from(format!(
+                            "Error sending the transaction: {}",
+                            e
+                        ))
+                    })?;
+
+                let receipt = pending_tx.await?;
+                if let Some(receipt) = receipt {
+                    if receipt.status == Some(U64::from(1)) {
+                        println!("Transaction succeeded: {:?}", receipt.transaction_hash);
+                        Ok(Some(Value::String(format!(
+                            "Transaction Hash: {:?}",
+                            receipt.transaction_hash
+                        ))))
+                    } else {
+                        eprintln!("Transaction failed: {:?}", receipt);
+                        Err("Transaction execution failed".into())
+                    }
+                } else {
+                    Err("Transaction was not mined".into())
                 }
-                Some(r) => {
-                    println!(
-                        "Transaction failed with status {:?}, hash: {:?}",
-                        r.status, r.transaction_hash
-                    );
-                    return Err("Transaction failed".into());
+            } else {
+                Err("Contract address or ABI is missing".into())
+            }
+        } else {
+            if let (Some(abi), Some(bytecode)) = (&self.abi, &self.bytecode) {
+                let factory = ContractFactory::new(abi.clone(), bytecode.clone(), client.clone());
+
+                let constructor_args: Vec<abi::Token> = match params {
+                    Some(param_list) => param_list
+                        .into_iter()
+                        .map(|param| {
+                            serde_json::from_value::<abi::Token>(param)
+                                .map_err(|e| format!("Error decoding arguments: {}", e))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    None => vec![],
+                };
+
+                let deployer = factory.deploy(constructor_args)?;
+
+                let mut tx = deployer.tx.clone();
+                if let TypedTransaction::Eip1559(ref mut request) = tx {
+                    if let Some(ref gas_options) = self.gas_options {
+                        request.max_fee_per_gas = gas_options
+                            .max_fee_per_gas
+                            .or_else(|| Some(100_000_000_000u64.into()));
+                        request.max_priority_fee_per_gas = gas_options
+                            .max_priority_fee_per_gas
+                            .or_else(|| Some(2_000_000_000u64.into()));
+                        request.gas = gas_options.gas_limit.or_else(|| Some(2_000_000u64.into()));
+                        request.nonce = gas_options.nonce;
+                    } else {
+                        request.max_fee_per_gas = Some(100_000_000_000u64.into());
+                        request.max_priority_fee_per_gas = Some(2_000_000_000u64.into());
+                        request.gas = Some(2_000_000u64.into());
+                        request.nonce = None;
+                    }
+                } else {
+                    panic!("The transaction is not of type EIP-1559");
                 }
-                None => return Err("Transaction was not mined".into()),
+
+                let pending_tx = client.send_transaction(tx, None).await?;
+
+                match pending_tx.await {
+                    Ok(contract) => match contract {
+                        Some(tx) => {
+                            println!("Contract deployed at: {:?}", tx.contract_address);
+                            Ok(Some(Value::String(
+                                tx.contract_address.unwrap().to_string(),
+                            )))
+                        }
+                        None => {
+                            eprintln!("Error getting contract address");
+                            Err(Box::new(io::Error::new(
+                                io::ErrorKind::Other,
+                                "Error getting contract address",
+                            )))
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Error deploying contract: {:?}", e);
+                        Err(Box::new(e))
+                    }
+                }
+            } else {
+                Err("ABI or Bytecode is missing for contract deployment".into())
             }
         }
-
-        Ok(None)
     }
 }
 

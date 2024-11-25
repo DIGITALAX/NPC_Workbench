@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
     use tokio::time::Duration;
-    use ethers::types::{Chain, H160};
+    use ethers::types::{Address, Chain, H160, U256};
     use npc_workbench::{
         adapters::{links::{evaluations::{EvaluationResponseType, EvaluationType}, listeners::ListenerType}, nodes::{
-            agents::{LLMModel, Objective}, connectors::off_chain::ConnectorType, 
+            agents::{LLMModel, Objective}, connectors::{off_chain::ConnectorType, on_chain::GasOptions}, 
         }},
         ipfs::IPFSProvider,
         nibble::Nibble,
@@ -751,6 +751,29 @@ mod tests {
                 })),
                 &H160::from_str("0x0000000000000000000000000000000000000001").unwrap(),None
             );
+
+            // subflujo de crear el token
+            // agent would generate lore / details of the token to send to the on-chain adapter
+            let on_chain_adapter_create_memecoin = nibble.add_onchain_connector("CreateMemecoinConnector", None, false, Some(include_bytes!("../abis/NibbleFactory.json").into()), Some(serde_json::from_str(include_str!("../abis/NibbleFactory.json")).unwrap()), Chain::Polygon,  Some(GasOptions {
+                max_fee_per_gas: Some(U256::from(1_000_000_000)), 
+                max_priority_fee_per_gas: Some(U256::from(1_000_000)), 
+                gas_limit: Some(U256::from(3_000_000)), 
+                nonce: None,
+            }));
+
+            let on_chain_adapter_uniswap_pool = nibble.add_onchain_connector("CreateUniswapPoolConnector", Some("0x1F98431c8aD98523631AE4a59f267346ea31F984".parse::<Address>().unwrap()), false, None, Some(serde_json::from_str(include_str!("../abis/NibbleFactory.json")).unwrap()), Chain::Polygon,  Some(GasOptions {
+                max_fee_per_gas: Some(U256::from(1_000_000_000)), 
+                max_priority_fee_per_gas: Some(U256::from(1_000_000)), 
+                gas_limit: Some(U256::from(3_000_000)), 
+                nonce: None,
+            }));
+
+            let on_chain_adapter_balancer_pool = nibble.add_onchain_connector("CreateBalancerWeightedPool", Some("0x8e9aa87E45e92BAD84dE4fA65B9988F8235E15F8".parse::<Address>().unwrap()), false, None, Some(serde_json::from_str(include_str!("../abis/NibbleFactory.json")).unwrap()), Chain::Polygon,  Some(GasOptions {
+                max_fee_per_gas: Some(U256::from(1_000_000_000)), 
+                max_priority_fee_per_gas: Some(U256::from(1_000_000)), 
+                gas_limit: Some(U256::from(3_000_000)), 
+                nonce: None,
+            }));
             
             
             }
@@ -759,6 +782,9 @@ mod tests {
                 panic!("Test failed due a critical error during Nibble creation.");
             }
         }
+
+
+
     }
 }
 
