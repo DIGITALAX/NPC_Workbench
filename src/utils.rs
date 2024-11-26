@@ -199,25 +199,19 @@ pub async fn load_nibble_from_subgraph(
         .send()
         .await?;
 
-
-
     if res.status().is_success() {
         let json: Value = res.json().await?;
 
-        println!("AQUI {:?}", json);
-
-      
         if let Some(object) = json["data"]["nibbleDeployed"].as_object() {
-    
             return Ok(GraphNibbleResponse {
                 // agents: build_agents(object.get("agents").unwrap(), wallet.clone()).await?,
                 agents: vec![],
                 conditions: vec![],
                 listeners: vec![],
                 evaluations: vec![],
-                fhe_gates:vec![],
-                offchain_connectors:vec![],
-                onchain_connectors:vec![],
+                fhe_gates: vec![],
+                offchain_connectors: vec![],
+                onchain_connectors: vec![],
                 // conditions: build_conditions(object.get("conditions").unwrap(), wallet.clone())
                 //     .await?,
                 // listeners: build_listeners(
@@ -254,7 +248,6 @@ pub async fn load_nibble_from_subgraph(
                     .and_then(|v| v.as_str())
                     .ok_or("Missing count")?
                     .parse::<U256>()?,
-             
             });
         } else {
             return Err("No data returned from Graph query".into());
@@ -374,7 +367,7 @@ async fn build_agents(
                 objectives,
             });
         }
-    } 
+    }
     Ok(agents)
 }
 
