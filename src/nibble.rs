@@ -506,21 +506,18 @@ impl Nibble {
                 let FunctionCall { tx, .. } = call;
 
                 if let Some(tx_request) = tx.as_eip1559_ref() {
-                    let gas_price = U256::from(50_000_000_000u64);
-                    let max_priority_fee = U256::from(25_000_000_000u64);
-                    let gas_limit = U256::from(150_000);
-
                     let cliente = contract_instance.client().clone();
+
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
                         to: Some(NameOrAddress::Address(
                             NIBBLE_FACTORY_CONTRACT.parse::<Address>().unwrap(),
                         )),
-                        gas: Some(gas_limit),
+                        gas: Some(U256::from(1252629)),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
-                        max_priority_fee_per_gas: Some(max_priority_fee),
-                        max_fee_per_gas: Some(gas_price + max_priority_fee),
+                        max_fee_per_gas: Some(U256::from_dec_str("44786996170").unwrap()),
+                        max_priority_fee_per_gas: Some(U256::from_dec_str("25000000000").unwrap()),
                         chain_id: Some(Chain::PolygonAmoy.into()),
                         ..Default::default()
                     };
@@ -534,7 +531,13 @@ impl Nibble {
                     };
 
                     let receipt = match pending_tx.await {
-                        Ok(Some(receipt)) => receipt,
+                        Ok(Some(receipt)) => {
+                            if receipt.status != Some(1.into()) {
+                                eprintln!("Error with the transaction: {:?}", receipt.status);
+                                return Err("Error with the transaction".into());
+                            }
+                            receipt
+                        }
                         Ok(None) => {
                             return Err("Transaction not recieved".into());
                         }
@@ -548,40 +551,58 @@ impl Nibble {
                         let log_data_bytes = log.data.0.clone();
                         let decoded: Vec<Token> = decode(
                             &[
-                                ParamType::Array(Box::new(ParamType::Address)),
+                                ParamType::FixedArray(Box::new(ParamType::Address), 9),
                                 ParamType::Bytes,
                                 ParamType::Uint(256),
                             ],
                             &log_data_bytes,
                         )?;
-                        let addresses: Vec<Address> = match decoded.get(0) {
-                            Some(Token::Array(arr)) => arr
-                                .iter()
-                                .filter_map(|t| match t {
-                                    Token::Address(addr) => Some(*addr),
-                                    _ => None,
+
+                        let return_values: ([Address; 9], Vec<u8>, U256) = {
+                            let addresses: [Address; 9] = decoded
+                            .get(0)
+                            .and_then(|token| {
+                                if let Token::FixedArray(array) = token {
+                                    array
+                                        .iter()
+                                        .map(|t| match t {
+                                            Token::Address(addr) => *addr,
+                                            _ => panic!("Unexpected token type in FixedArray"),
+                                        })
+                                        .collect::<Vec<Address>>()
+                                        .try_into()
+                                        .ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .ok_or_else(|| "Invalid address array")?;
+                        
+
+                            let id: Vec<u8> = decoded
+                                .get(1)
+                                .and_then(|token| {
+                                    if let Token::Bytes(bytes) = token {
+                                        Some(bytes.clone())
+                                    } else {
+                                        None
+                                    }
                                 })
-                                .collect(),
-                            _ => return Err("Invalid address array".into()),
-                        };
+                                .ok_or_else(|| "Invalid ID bytes")?;
 
-                        let id = match decoded.get(1) {
-                            Some(Token::Bytes(bytes)) => bytes.clone(),
-                            _ => return Err("Invalid ID bytes".into()),
-                        };
+                            let count: U256 = decoded
+                                .get(2)
+                                .and_then(|token| {
+                                    if let Token::Uint(count) = token {
+                                        Some(*count)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .ok_or_else(|| "Invalid count")?;
 
-                        let count = match decoded.get(2) {
-                            Some(Token::Uint(count)) => *count,
-                            _ => return Err("Invalid count".into()),
+                            (addresses, id, count)
                         };
-
-                        let return_values: ([Address; 9], Vec<u8>, U256) = (
-                            addresses
-                                .try_into()
-                                .map_err(|_| "Invalid number of addresses")?,
-                            id,
-                            count,
-                        );
 
                         self.contracts = vec![
                             ContractInfo {
@@ -755,11 +776,11 @@ impl Nibble {
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
                         to: Some(NameOrAddress::Address(storage_contract_address)),
-                        gas: Some(gas_limit),
+                        gas: Some(U256::from(1252629)),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
-                        max_priority_fee_per_gas: Some(max_priority_fee),
-                        max_fee_per_gas: Some(gas_price + max_priority_fee),
+                        max_fee_per_gas: Some(U256::from_dec_str("44786996170").unwrap()),
+                        max_priority_fee_per_gas: Some(U256::from_dec_str("25000000000").unwrap()),
                         chain_id: Some(Chain::PolygonAmoy.into()),
                         ..Default::default()
                     };
@@ -867,12 +888,11 @@ impl Nibble {
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
                         to: Some(NameOrAddress::Address(storage_contract_address)),
-                        gas: Some(gas_limit),
+                        gas: Some(U256::from(1252629)),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
-                        max_priority_fee_per_gas: Some(max_priority_fee),
-                        max_fee_per_gas: Some(gas_price + max_priority_fee),
-                        chain_id: Some(Chain::PolygonAmoy.into()),
+                        max_fee_per_gas: Some(U256::from_dec_str("44786996170").unwrap()),
+                        max_priority_fee_per_gas: Some(U256::from_dec_str("25000000000").unwrap()),
                         ..Default::default()
                     };
 
@@ -1243,12 +1263,11 @@ where
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
                         to: Some(NameOrAddress::Address(contract_address)),
-                        gas: Some(gas_limit),
+                        gas: Some(U256::from(1252629)),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
-                        max_priority_fee_per_gas: Some(max_priority_fee),
-                        max_fee_per_gas: Some(gas_price + max_priority_fee),
-                        chain_id: Some(Chain::PolygonAmoy.into()),
+                        max_fee_per_gas: Some(U256::from_dec_str("44786996170").unwrap()),
+                        max_priority_fee_per_gas: Some(U256::from_dec_str("25000000000").unwrap()),
                         ..Default::default()
                     };
 
@@ -1475,12 +1494,11 @@ where
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
                         to: Some(NameOrAddress::Address(contract_address)),
-                        gas: Some(gas_limit),
+                        gas: Some(U256::from(1252629)),
                         value: tx_request.value,
                         data: tx_request.data.clone(),
-                        max_priority_fee_per_gas: Some(max_priority_fee),
-                        max_fee_per_gas: Some(gas_price + max_priority_fee),
-                        chain_id: Some(Chain::PolygonAmoy.into()),
+                        max_fee_per_gas: Some(U256::from_dec_str("44786996170").unwrap()),
+                        max_priority_fee_per_gas: Some(U256::from_dec_str("25000000000").unwrap()),
                         ..Default::default()
                     };
 

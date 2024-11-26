@@ -820,7 +820,7 @@ mod tests {
             
             }
             Err(e) => {
-                eprintln!("Error al crear objeto: {:?}", e);
+                eprintln!("Error creating the object: {:?}", e);
                 panic!("Test failed due a critical error during Nibble creation.");
             }
         }
