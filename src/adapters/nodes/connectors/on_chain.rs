@@ -13,7 +13,7 @@ use transaction::eip2718::TypedTransaction;
 #[derive(Debug, Clone)]
 pub struct OnChainConnector {
     pub name: String,
-    pub id: Vec<u8>,
+    pub id: String,
     pub address: Option<Address>,
     pub encrypted: bool,
     pub abi: Option<abi::Abi>,
@@ -279,7 +279,7 @@ impl Adaptable for OnChainConnector {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }

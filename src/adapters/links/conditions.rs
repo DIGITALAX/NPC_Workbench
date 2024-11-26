@@ -35,7 +35,7 @@ pub struct Condition {
     pub condition_type: ConditionType,
     pub check: ConditionCheck,
     pub encrypted: bool,
-    pub id: Vec<u8>,
+    pub id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -212,7 +212,7 @@ impl Adaptable for Condition {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }
@@ -322,15 +322,9 @@ impl Condition {
 
         let id = value
             .get("id")
-            .and_then(|v| v.as_array())
-            .ok_or("Missing or invalid `id`".to_string())?
-            .iter()
-            .map(|v| {
-                v.as_u64()
-                    .ok_or("Invalid `id` element".to_string())
-                    .map(|n| n as u8)
-            })
-            .collect::<Result<Vec<u8>, String>>()?;
+            .and_then(|v| v.as_str())
+            .ok_or("Missing or invalid `id`")?
+            .to_string();
 
         Ok(Condition {
             name,

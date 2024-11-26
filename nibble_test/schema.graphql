@@ -1,17 +1,22 @@
-type NibbleDeployed @entity(immutable: true) {
+type NibbleDeployed @entity(immutable: false) {
   id: Bytes!
-  storageContract: Bytes! # address
-  listenersContract: Bytes! # address
-  conditionsContract: Bytes! # address
-  evaluationsContract: Bytes! # address
-  agentsContract: Bytes! # address
-  connectorsContract: Bytes! # address
-  fheGatesContract: Bytes! # address
-  accessControlsContract: Bytes! # address
-  workflowsContract: Bytes! # address
-  NibbleFactory_id: Bytes! # bytes
+  contracts: [ContractInfo!]
   count: BigInt! # uint256
   blockNumber: BigInt!
   blockTimestamp: BigInt!
   transactionHash: Bytes!
+  agents: [Bytes!]
+  conditions: [Bytes!]
+  listeners: [Bytes!]
+  fhe_gates: [Bytes!]
+  evaluations: [Bytes!]
+  onchain_connectors: [Bytes!]
+  offchain_connectors: [Bytes!]
+  workflows: [Bytes!]
+}
+
+type ContractInfo @entity(immutable: false) {
+  id: Bytes!
+  name: String!
+  address: Bytes!
 }

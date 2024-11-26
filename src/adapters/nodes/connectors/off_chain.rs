@@ -25,7 +25,7 @@ pub enum ConnectorType {
 #[derive(Clone)]
 pub struct OffChainConnector {
     pub name: String,
-    pub id: Vec<u8>,
+    pub id: String,
     pub connector_type: ConnectorType,
     pub api_url: String,
     pub encrypted: bool,
@@ -299,7 +299,7 @@ impl Adaptable for OffChainConnector {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }

@@ -1,25 +1,53 @@
-import { NibbleDeployed as NibbleDeployedEvent } from "../generated/NibbleFactory/NibbleFactory"
-import { NibbleDeployed } from "../generated/schema"
+import { Address, Bytes } from "@graphprotocol/graph-ts";
+import { NibbleDeployed as NibbleDeployedEvent } from "../generated/NibbleFactory/NibbleFactory";
+import { ContractInfo, NibbleDeployed } from "../generated/schema";
 
 export function handleNibbleDeployed(event: NibbleDeployedEvent): void {
-  let entity = new NibbleDeployed(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.storageContract = event.params.storageContract
-  entity.listenersContract = event.params.listenersContract
-  entity.conditionsContract = event.params.conditionsContract
-  entity.evaluationsContract = event.params.evaluationsContract
-  entity.agentsContract = event.params.agentsContract
-  entity.connectorsContract = event.params.connectorsContract
-  entity.fheGatesContract = event.params.fheGatesContract
-  entity.accessControlsContract = event.params.accessControlsContract
-  entity.workflowsContract = event.params.workflowsContract
-  entity.NibbleFactory_id = event.params.id
-  entity.count = event.params.count
+  let entity = new NibbleDeployed(event.params.id);
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
+  let contracts: Bytes[] = [
+    event.params.storageContract,
+    event.params.listenersContract,
+    event.params.conditionsContract,
+    event.params.evaluationsContract,
+    event.params.agentsContract,
+    event.params.connectorsContract,
+    event.params.fheGatesContract,
+    event.params.accessControlsContract,
+    event.params.workflowsContract,
+  ];
 
-  entity.save()
+  let names: string[] = [
+    "NibbleStorage",
+    "NibbleListeners",
+    "NibbleConditions",
+    "NibbleEvaluations",
+    "NibbleAgents",
+    "NibbleConnectors",
+    "NibbleFHEGates",
+    "NibbleAccessControls",
+    "NibbleWorkflows",
+  ];
+
+  let contractInfoIds: Bytes[] = [];
+
+  for (let i = 0; i < contracts.length; i++) {
+    let info = new ContractInfo(contracts[i]);
+
+    info.name = names[i];
+    info.address = contracts[i];
+
+    info.save();
+
+    contractInfoIds.push(info.id);
+  }
+
+  entity.contracts = contractInfoIds;
+  entity.count = event.params.count;
+
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+
+  entity.save();
 }

@@ -16,7 +16,7 @@ use tokio::{
 pub struct Evaluation {
     pub name: String,
     pub encrypted: bool,
-    pub id: Vec<u8>,
+    pub id: String,
     pub evaluation_type: EvaluationType,
 }
 
@@ -34,7 +34,7 @@ pub enum EvaluationType {
         response_type: EvaluationResponseType,
     },
     AgentJudge {
-        agent_id: Vec<u8>,
+        agent_id: String,
         prompt: String,
         response_type: EvaluationResponseType,
     },
@@ -150,7 +150,7 @@ impl Adaptable for Evaluation {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }
@@ -199,7 +199,7 @@ impl EvaluationType {
                 map.insert("type".to_string(), Value::String("AgentJudge".to_string()));
                 map.insert(
                     "agent_id".to_string(),
-                    Value::Array(agent_id.iter().map(|&b| Value::Number(b.into())).collect()),
+                    Value::String(agent_id.to_string()),
                 );
                 map.insert("response_type".to_string(), response_type.to_json());
                 map.insert("prompt".to_string(), Value::String(prompt.to_string()));
@@ -227,7 +227,7 @@ impl Evaluation {
         previous_node_context: Option<Value>,
         flow_previous_context: Option<&str>,
         flow_next_steps: Option<&str>,
-        interaction_id: Vec<u8>,
+        interaction_id: String,
     ) -> Result<Value, Box<dyn Error + Send + Sync>> {
         match &self.evaluation_type {
             EvaluationType::HumanJudge {

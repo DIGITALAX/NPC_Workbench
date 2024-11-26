@@ -43,10 +43,10 @@ use std::{
 use tokio::time::Duration;
 
 pub struct GraphWorkflowResponse {
-    pub id: Vec<u8>,
+    pub id: String,
     pub name: String,
-    pub nodes: HashMap<Vec<u8>, WorkflowNode>,
-    pub links: HashMap<Vec<u8>, WorkflowLink>,
+    pub nodes: HashMap<String, WorkflowNode>,
+    pub links: HashMap<String, WorkflowLink>,
     pub encrypted: bool,
     pub execution_history: Vec<ExecutionHistory>,
 }
@@ -61,10 +61,9 @@ pub struct GraphNibbleResponse {
     pub offchain_connectors: Vec<OffChainConnector>,
     pub contracts: Vec<ContractInfo>,
     pub count: U256,
-    pub debug: bool,
 }
 
-pub fn generate_unique_id(address: &H160) -> Vec<u8> {
+pub fn generate_unique_id(address: &H160) -> String {
     let timestamp = Utc::now().timestamp_nanos_opt().expect("Invalid timestamp");
 
     let random_bytes: [u8; 4] = rand::thread_rng().gen();
@@ -78,12 +77,12 @@ pub fn generate_unique_id(address: &H160) -> Vec<u8> {
     unique_id.extend_from_slice(&random_bytes);
     unique_id.extend_from_slice(&address_hash[..8]);
 
-    unique_id
+    format!("0x{}", hex::encode(unique_id))
 }
 
 pub async fn load_workflow_from_subgraph(
-    workflow_id: Vec<u8>,
-    nibble_id: Vec<u8>,
+    workflow_id: String,
+    nibble_id: String,
     api_key: Option<String>,
 ) -> Result<GraphWorkflowResponse, Box<dyn Error + Send + Sync>> {
     let mut url = GRAPH_ENDPOINT_DEV.to_string();
@@ -106,8 +105,8 @@ pub async fn load_workflow_from_subgraph(
                     }
                 "#,
         "variables": {
-            "id": String::from_utf8(workflow_id)?,
-            "nibble_id": String::from_utf8(nibble_id)?
+            "id": workflow_id,
+            "nibble_id": nibble_id
         }
     });
     let res = client
@@ -128,7 +127,7 @@ pub async fn load_workflow_from_subgraph(
                 .to_string();
 
             return Ok(GraphWorkflowResponse {
-                id: STANDARD.decode(&id).map_err(|_| "Failed to decode id")?,
+                id,
                 name: object
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -154,42 +153,45 @@ pub async fn load_workflow_from_subgraph(
 }
 
 pub async fn load_nibble_from_subgraph(
-    id: Vec<u8>,
+    id: String,
     api_key: Option<String>,
     wallet: LocalWallet,
     provider: Provider<Http>,
 ) -> Result<GraphNibbleResponse, Box<dyn Error + Send + Sync>> {
-    let mut url = GRAPH_ENDPOINT_DEV.to_string();
-
-    if api_key.is_some() {
-        url = GRAPH_ENDPOINT_PROD.replace("apikey", &api_key.unwrap());
-    }
+    let url = match api_key {
+        Some(key) => GRAPH_ENDPOINT_PROD.replace("apikey", &key),
+        None => GRAPH_ENDPOINT_DEV.to_string(),
+    };
 
     let client = Client::new();
 
     let query = json!({
         "query": r#"
                 query Nibble($id: ID!) {
-                    nibble(id: $id) {
-                        agents {
-                            id
-                            name
-                        }
+                    nibbleDeployed(id: $id) {
+                        agents
                         conditions
                         listeners
                         fhe_gates
                         evaluations
                         onchain_connectors
                         offchain_connectors
-                        contracts
+                        workflows
+                        contracts {
+                            name
+                            address
+                        }
                         count
                     }
                 }
             "#,
         "variables": {
-            "id": String::from_utf8(id)?
+            "id": id
+
+
         }
     });
+
     let res = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -197,34 +199,47 @@ pub async fn load_nibble_from_subgraph(
         .send()
         .await?;
 
+
+
     if res.status().is_success() {
         let json: Value = res.json().await?;
 
-        if let Some(object) = json["data"]["nibble"].as_object() {
+        println!("AQUI {:?}", json);
+
+      
+        if let Some(object) = json["data"]["nibbleDeployed"].as_object() {
+    
             return Ok(GraphNibbleResponse {
-                agents: build_agents(object.get("agents").unwrap(), wallet.clone()).await?,
-                conditions: build_conditions(object.get("conditions").unwrap(), wallet.clone())
-                    .await?,
-                listeners: build_listeners(
-                    object.get("listeners").unwrap(),
-                    wallet.clone(),
-                    provider,
-                )
-                .await?,
-                fhe_gates: build_fhe_gates(object.get("fhe_gates").unwrap(), wallet.clone())
-                    .await?,
-                evaluations: build_evaluations(object.get("evaluations").unwrap(), wallet.clone())
-                    .await?,
-                onchain_connectors: build_onchain_connectors(
-                    object.get("onchain_connectors").unwrap(),
-                    wallet.clone(),
-                )
-                .await?,
-                offchain_connectors: build_offchain_connectors(
-                    object.get("offchain_connectors").unwrap(),
-                    wallet.clone(),
-                )
-                .await?,
+                // agents: build_agents(object.get("agents").unwrap(), wallet.clone()).await?,
+                agents: vec![],
+                conditions: vec![],
+                listeners: vec![],
+                evaluations: vec![],
+                fhe_gates:vec![],
+                offchain_connectors:vec![],
+                onchain_connectors:vec![],
+                // conditions: build_conditions(object.get("conditions").unwrap(), wallet.clone())
+                //     .await?,
+                // listeners: build_listeners(
+                //     object.get("listeners").unwrap(),
+                //     wallet.clone(),
+                //     provider,
+                // )
+                // .await?,
+                // fhe_gates: build_fhe_gates(object.get("fhe_gates").unwrap(), wallet.clone())
+                //     .await?,
+                // evaluations: build_evaluations(object.get("evaluations").unwrap(), wallet.clone())
+                //     .await?,
+                // onchain_connectors: build_onchain_connectors(
+                //     object.get("onchain_connectors").unwrap(),
+                //     wallet.clone(),
+                // )
+                // .await?,
+                // offchain_connectors: build_offchain_connectors(
+                //     object.get("offchain_connectors").unwrap(),
+                //     wallet.clone(),
+                // )
+                // .await?,
                 contracts: object
                     .get("contracts")
                     .cloned()
@@ -239,10 +254,7 @@ pub async fn load_nibble_from_subgraph(
                     .and_then(|v| v.as_str())
                     .ok_or("Missing count")?
                     .parse::<U256>()?,
-                debug: object
-                    .get("debug")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+             
             });
         } else {
             return Err("No data returned from Graph query".into());
@@ -270,12 +282,6 @@ async fn build_agents(
     let mut agents = Vec::new();
     if let Some(agent_array) = data.as_array() {
         for agent_data in agent_array {
-            let id = agent_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let metadata_hash = agent_data
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -350,7 +356,11 @@ async fn build_agents(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                id,
+                id: metadata
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 role,
                 personality,
                 system,
@@ -364,7 +374,7 @@ async fn build_agents(
                 objectives,
             });
         }
-    }
+    } 
     Ok(agents)
 }
 
@@ -601,12 +611,6 @@ async fn build_conditions(
 
     if let Some(condition_array) = data.as_array() {
         for condition_data in condition_array {
-            let id = condition_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let metadata_hash = condition_data
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -628,6 +632,12 @@ async fn build_conditions(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed Condition")
+                .to_string();
+
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for Condition")
                 .to_string();
 
             let condition_type = match metadata
@@ -718,11 +728,6 @@ async fn build_listeners(
         for listener_data in listener_array {
             let provider = provider.clone();
             let wallet = wallet.clone();
-            let id = listener_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
 
             let metadata_hash = listener_data
                 .get("metadata")
@@ -745,6 +750,12 @@ async fn build_listeners(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed Listener")
+                .to_string();
+
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for Listener")
                 .to_string();
 
             let listener_type = match metadata
@@ -818,12 +829,6 @@ async fn build_evaluations(
 
     if let Some(evaluation_array) = data.as_array() {
         for evaluation_data in evaluation_array {
-            let id = evaluation_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let metadata_hash = evaluation_data
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -845,6 +850,12 @@ async fn build_evaluations(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed Evaluation")
+                .to_string();
+
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for Evaluation")
                 .to_string();
 
             let evaluation_type = match metadata
@@ -904,8 +915,8 @@ async fn build_evaluations(
                     agent_id: metadata
                         .get("agent_id")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.as_bytes().to_vec())
-                        .unwrap_or_else(|| vec![0]),
+                        .unwrap_or("")
+                        .to_string(),
                     response_type: match metadata.get("response_type") {
                         Some(Value::Bool(expected)) => EvaluationResponseType::Boolean {
                             expected: *expected,
@@ -941,12 +952,6 @@ async fn build_fhe_gates(
 
     if let Some(fhe_gate_array) = data.as_array() {
         for fhe_gate_data in fhe_gate_array {
-            let id = fhe_gate_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let metadata_hash = fhe_gate_data
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -967,6 +972,12 @@ async fn build_fhe_gates(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed FHE Gate")
+                .to_string();
+
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for FHE Gate")
                 .to_string();
 
             let key = metadata
@@ -1026,12 +1037,6 @@ async fn build_onchain_connectors(
 
     if let Some(connector_array) = data.as_array() {
         for connector_data in connector_array {
-            let id = connector_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let metadata_hash = connector_data
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -1061,6 +1066,12 @@ async fn build_onchain_connectors(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed OnChain Connector")
+                .to_string();
+
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for OnChain Connector")
                 .to_string();
             let address = metadata
                 .get("address")
@@ -1115,12 +1126,6 @@ pub async fn build_offchain_connectors(
 
     if let Some(connector_array) = data.as_array() {
         for connector_data in connector_array {
-            let id = connector_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let metadata_hash = connector_data
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -1150,6 +1155,12 @@ pub async fn build_offchain_connectors(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unnamed OffChain Connector")
+                .to_string();
+
+            let id = metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for OffChain Connector")
                 .to_string();
 
             let api_url = metadata
@@ -1244,17 +1255,11 @@ pub async fn build_offchain_connectors(
 
 fn build_nodes(
     data: &Value,
-) -> Result<HashMap<Vec<u8>, WorkflowNode>, Box<dyn Error + Send + Sync>> {
+) -> Result<HashMap<String, WorkflowNode>, Box<dyn Error + Send + Sync>> {
     let mut nodes = HashMap::new();
 
     if let Some(node_array) = data.as_array() {
         for node_data in node_array {
-            let id = node_data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
             let adapter_type = match node_data
                 .get("adapter_type")
                 .and_then(|v| v.as_str())
@@ -1266,11 +1271,17 @@ fn build_nodes(
                 _ => return Err("Invalid adapter_type".into()),
             };
 
-            let adapter_id = node_data
+            let id = node_data
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No ID for Node")
+                .to_string();
+
+            let adapter_id: String = node_data
                 .get("adapter_id")
                 .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
+                .unwrap_or("No ID for Adapter")
+                .to_string();
 
             let repetitions = node_data
                 .get("repetitions")
@@ -1363,8 +1374,8 @@ fn build_execution_history(
             let element_id = item
                 .get("element_id")
                 .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
+                .unwrap_or("No ID for Element")
+                .to_string();
 
             let element_type = item
                 .get("element_type")
@@ -1398,7 +1409,7 @@ fn build_execution_history(
 
 fn build_links(
     data: &Value,
-) -> Result<HashMap<Vec<u8>, WorkflowLink>, Box<dyn Error + Send + Sync>> {
+) -> Result<HashMap<String, WorkflowLink>, Box<dyn Error + Send + Sync>> {
     let mut links = HashMap::new();
 
     if let Some(link_array) = data.as_array() {
@@ -1406,15 +1417,14 @@ fn build_links(
             let id = link_data
                 .get("id")
                 .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
+                .unwrap_or("No ID for Link")
+                .to_string();
 
             let adapter_id = link_data
                 .get("adapter_id")
                 .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
-                .unwrap_or_default();
-
+                .unwrap_or("No ID for Adapter")
+                .to_string();
             let adapter_type = match link_data
                 .get("adapter_type")
                 .and_then(|v| v.as_str())
@@ -1442,12 +1452,21 @@ fn build_links(
 
             let target = link_data
                 .get("target")
-                .and_then(|v| v.as_str())
-                .map(|s| hex::decode(s).unwrap_or_default())
+                .and_then(|v| v.as_object())
                 .map(|decoded| LinkTarget {
-                    true_target_id: decoded.clone(),
-                    false_target_id: decoded.clone(),
-                    generated_target_id: Some(decoded),
+                    true_target_id: decoded
+                        .get("true_target_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("No true_target_id")
+                        .to_string(),
+                    false_target_id: decoded
+                        .get("false_target_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("No false_target_id")
+                        .to_string(),
+                    generated_target_id: decoded
+                        .get("true_target_id")
+                        .and_then(|v| v.as_str().map(|s| s.to_string())),
                 });
 
             let context_tool = link_data

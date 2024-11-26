@@ -25,6 +25,7 @@ use ethers::{
     abi::{Abi, Token, Tokenize},
     prelude::*,
     types::{Address, Eip1559TransactionRequest, NameOrAddress, U256},
+    utils::hex,
 };
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Method;
@@ -43,7 +44,7 @@ where
 
 pub trait Adaptable {
     fn name(&self) -> &str;
-    fn id(&self) -> &Vec<u8>;
+    fn id(&self) -> &str;
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +96,7 @@ pub struct Nibble {
     pub saved_offchain_connectors: Vec<OffChainConnector>,
     pub contracts: Vec<ContractInfo>,
     pub owner_wallet: LocalWallet,
-    pub id: Option<Vec<u8>>,
+    pub id: Option<String>,
     pub count: U256,
     pub provider: Provider<Http>,
     pub chain: Chain,
@@ -115,11 +116,11 @@ pub struct ModifyAdapters {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RemoveAdapters {
-    pub conditions: Vec<Vec<u8>>,
-    pub listeners: Vec<Vec<u8>>,
-    pub connectors: Vec<Vec<u8>>,
-    pub agents: Vec<Vec<u8>>,
-    pub evaluations: Vec<Vec<u8>>,
+    pub conditions: Vec<String>,
+    pub listeners: Vec<String>,
+    pub connectors: Vec<String>,
+    pub agents: Vec<String>,
+    pub evaluations: Vec<String>,
 }
 
 impl Tokenize for ModifyAdapters {
@@ -130,7 +131,7 @@ impl Tokenize for ModifyAdapters {
                     .into_iter()
                     .map(|condition| {
                         Token::Tuple(vec![
-                            Token::Bytes(condition.id),
+                            Token::String(condition.id),
                             Token::String(condition.metadata),
                             Token::Bool(condition.encrypted),
                         ])
@@ -142,7 +143,7 @@ impl Tokenize for ModifyAdapters {
                     .into_iter()
                     .map(|listener| {
                         Token::Tuple(vec![
-                            Token::Bytes(listener.id),
+                            Token::String(listener.id),
                             Token::String(listener.metadata),
                             Token::Bool(listener.encrypted),
                         ])
@@ -154,7 +155,7 @@ impl Tokenize for ModifyAdapters {
                     .into_iter()
                     .map(|connector| {
                         Token::Tuple(vec![
-                            Token::Bytes(connector.id),
+                            Token::String(connector.id),
                             Token::String(connector.metadata),
                             Token::Bool(connector.encrypted),
                             Token::Bool(connector.onChain),
@@ -167,7 +168,7 @@ impl Tokenize for ModifyAdapters {
                     .into_iter()
                     .map(|agent| {
                         Token::Tuple(vec![
-                            Token::Bytes(agent.id),
+                            Token::String(agent.id),
                             Token::String(agent.metadata),
                             Token::Address(agent.wallet),
                             Token::Bool(agent.encrypted),
@@ -181,7 +182,7 @@ impl Tokenize for ModifyAdapters {
                     .into_iter()
                     .map(|evaluation| {
                         Token::Tuple(vec![
-                            Token::Bytes(evaluation.id),
+                            Token::String(evaluation.id),
                             Token::String(evaluation.metadata),
                             Token::Bool(evaluation.encrypted),
                         ])
@@ -195,32 +196,32 @@ impl Tokenize for ModifyAdapters {
 impl Tokenize for RemoveAdapters {
     fn into_tokens(self) -> Vec<Token> {
         vec![
-            Token::Array(self.conditions.into_iter().map(Token::Bytes).collect()),
-            Token::Array(self.listeners.into_iter().map(Token::Bytes).collect()),
-            Token::Array(self.connectors.into_iter().map(Token::Bytes).collect()),
-            Token::Array(self.agents.into_iter().map(Token::Bytes).collect()),
-            Token::Array(self.evaluations.into_iter().map(Token::Bytes).collect()),
+            Token::Array(self.conditions.into_iter().map(Token::String).collect()),
+            Token::Array(self.listeners.into_iter().map(Token::String).collect()),
+            Token::Array(self.connectors.into_iter().map(Token::String).collect()),
+            Token::Array(self.agents.into_iter().map(Token::String).collect()),
+            Token::Array(self.evaluations.into_iter().map(Token::String).collect()),
         ]
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContractCondition {
-    pub id: Vec<u8>,
+    pub id: String,
     pub metadata: String,
     pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContractEvaluation {
-    pub id: Vec<u8>,
+    pub id: String,
     pub metadata: String,
     pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContractListener {
-    pub id: Vec<u8>,
+    pub id: String,
     pub metadata: String,
     pub encrypted: bool,
 }
@@ -228,7 +229,7 @@ pub struct ContractListener {
 #[derive(Debug, Clone, Serialize)]
 #[allow(non_snake_case)]
 pub struct ContractConnector {
-    pub id: Vec<u8>,
+    pub id: String,
     pub metadata: String,
     pub encrypted: bool,
     pub onChain: bool,
@@ -236,7 +237,7 @@ pub struct ContractConnector {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContractAgent {
-    pub id: Vec<u8>,
+    pub id: String,
     pub metadata: String,
     pub wallet: Address,
     pub encrypted: bool,
@@ -499,7 +500,7 @@ impl Nibble {
         );
 
         let method =
-            contract_instance.method::<_, ([Address; 9], Vec<u8>, U256)>("deployFromFactory", {});
+            contract_instance.method::<_, ([Address; 9], String, U256)>("deployFromFactory", {});
 
         match method {
             Ok(call) => {
@@ -558,32 +559,31 @@ impl Nibble {
                             &log_data_bytes,
                         )?;
 
-                        let return_values: ([Address; 9], Vec<u8>, U256) = {
+                        let return_values: ([Address; 9], String, U256) = {
                             let addresses: [Address; 9] = decoded
-                            .get(0)
-                            .and_then(|token| {
-                                if let Token::FixedArray(array) = token {
-                                    array
-                                        .iter()
-                                        .map(|t| match t {
-                                            Token::Address(addr) => *addr,
-                                            _ => panic!("Unexpected token type in FixedArray"),
-                                        })
-                                        .collect::<Vec<Address>>()
-                                        .try_into()
-                                        .ok()
-                                } else {
-                                    None
-                                }
-                            })
-                            .ok_or_else(|| "Invalid address array")?;
-                        
+                                .get(0)
+                                .and_then(|token| {
+                                    if let Token::FixedArray(array) = token {
+                                        array
+                                            .iter()
+                                            .map(|t| match t {
+                                                Token::Address(addr) => *addr,
+                                                _ => panic!("Unexpected token type in FixedArray"),
+                                            })
+                                            .collect::<Vec<Address>>()
+                                            .try_into()
+                                            .ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .ok_or_else(|| "Invalid address array")?;
 
-                            let id: Vec<u8> = decoded
+                            let id: String = decoded
                                 .get(1)
                                 .and_then(|token| {
                                     if let Token::Bytes(bytes) = token {
-                                        Some(bytes.clone())
+                                        Some(format!("0x{}", hex::encode(bytes)))
                                     } else {
                                         None
                                     }
@@ -687,12 +687,9 @@ impl Nibble {
         }
     }
 
-    pub async fn load_nibble(
-        &mut self,
-        id: Vec<u8>,
-    ) -> Result<Nibble, Box<dyn Error + Send + Sync>> {
+    pub async fn load_nibble(&mut self, id: &str) -> Result<Nibble, Box<dyn Error + Send + Sync>> {
         let response = load_nibble_from_subgraph(
-            id,
+            id.to_string(),
             self.graph_api_key.clone(),
             self.owner_wallet.clone(),
             self.provider.clone(),
@@ -707,7 +704,6 @@ impl Nibble {
         self.saved_agents = response.agents;
         self.saved_fhe_gates = response.fhe_gates;
         self.count = response.count;
-        self.debug = response.debug;
 
         Ok(Nibble {
             fhe_gates: vec![],
@@ -768,10 +764,6 @@ impl Nibble {
                 let FunctionCall { tx, .. } = call;
 
                 if let Some(tx_request) = tx.as_eip1559_ref() {
-                    let gas_price = U256::from(500_000_000_000u64);
-                    let max_priority_fee = U256::from(25_000_000_000u64);
-                    let gas_limit = U256::from(300_000);
-
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
@@ -880,10 +872,6 @@ impl Nibble {
                 let FunctionCall { tx, .. } = call;
 
                 if let Some(tx_request) = tx.as_eip1559_ref() {
-                    let gas_price = U256::from(500_000_000_000u64);
-                    let max_priority_fee = U256::from(25_000_000_000u64);
-                    let gas_limit = U256::from(300_000);
-
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
@@ -968,16 +956,13 @@ impl Nibble {
         }
     }
 
-    pub async fn load_workflow(
-        &self,
-        id: Vec<u8>,
-    ) -> Result<Workflow, Box<dyn Error + Send + Sync>> {
+    pub async fn load_workflow(&self, id: &str) -> Result<Workflow, Box<dyn Error + Send + Sync>> {
         if self.contracts.len() < 1 {
             return Err("No contracts found. Load or create a Nibble firsty.".into());
         }
 
         let workflow = load_workflow_from_subgraph(
-            id,
+            id.to_string(),
             self.id.as_ref().unwrap().clone(),
             self.graph_api_key.clone(),
         )
@@ -1046,7 +1031,7 @@ impl Nibble {
                     }
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractCondition, Box<dyn Error + Send + Sync>>(ContractCondition {
-                        id: condition.id().to_vec(),
+                        id: condition.id().to_string(),
                         metadata: ipfs_hash,
                         encrypted: condition.encrypted,
                     })
@@ -1063,7 +1048,7 @@ impl Nibble {
 
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractListener, Box<dyn Error + Send + Sync>>(ContractListener {
-                        id: listener.id().to_vec(),
+                        id: listener.id().to_string(),
                         metadata: ipfs_hash,
                         encrypted: listener.encrypted,
                     })
@@ -1128,7 +1113,7 @@ impl Nibble {
 
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractAgent, Box<dyn Error + Send + Sync>>(ContractAgent {
-                        id: agent.id().to_vec(),
+                        id: agent.id().to_string(),
                         metadata: ipfs_hash,
                         encrypted: agent.encrypted,
                         wallet: agent.wallet.address(),
@@ -1146,7 +1131,7 @@ impl Nibble {
 
                     let ipfs_hash = ipfs_client.upload(metadata).await?;
                     Ok::<ContractEvaluation, Box<dyn Error + Send + Sync>>(ContractEvaluation {
-                        id: evaluation.id().to_vec(),
+                        id: evaluation.id().to_string(),
                         metadata: ipfs_hash,
                         encrypted: evaluation.encrypted,
                     })
@@ -1255,10 +1240,6 @@ where
                 let FunctionCall { tx, .. } = call;
 
                 if let Some(tx_request) = tx.as_eip1559_ref() {
-                    let gas_price = U256::from(500_000_000_000u64);
-                    let max_priority_fee = U256::from(25_000_000_000u64);
-                    let gas_limit = U256::from(300_000);
-
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),
@@ -1479,17 +1460,13 @@ where
         };
 
         let method =
-            contract_instance.method::<_, H256>(&method_name, vec![self.adapter.id().clone()]);
+            contract_instance.method::<_, H256>(&method_name, vec![self.adapter.id().to_string()]);
 
         match method {
             Ok(call) => {
                 let FunctionCall { tx, .. } = call;
 
                 if let Some(tx_request) = tx.as_eip1559_ref() {
-                    let gas_price = U256::from(500_000_000_000u64);
-                    let max_priority_fee = U256::from(25_000_000_000u64);
-                    let gas_limit = U256::from(300_000);
-
                     let cliente = contract_instance.client().clone();
                     let req = Eip1559TransactionRequest {
                         from: Some(client.address()),

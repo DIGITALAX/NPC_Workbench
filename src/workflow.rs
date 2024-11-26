@@ -22,7 +22,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct ExecutionHistory {
-    pub element_id: Vec<u8>,
+    pub element_id: String,
     pub element_type: String,
     pub result: Option<Value>,
     pub description: Option<String>,
@@ -52,10 +52,10 @@ pub enum LinkAdapter {
 
 #[derive(Debug, Clone)]
 pub struct Workflow {
-    pub id: Vec<u8>,
+    pub id: String,
     pub name: String,
-    pub nodes: HashMap<Vec<u8>, WorkflowNode>,
-    pub links: HashMap<Vec<u8>, WorkflowLink>,
+    pub nodes: HashMap<String, WorkflowNode>,
+    pub links: HashMap<String, WorkflowLink>,
     pub nibble_context: Arc<Nibble>,
     pub encrypted: bool,
     pub execution_history: Vec<ExecutionHistory>,
@@ -63,8 +63,8 @@ pub struct Workflow {
 
 #[derive(Debug, Clone)]
 pub struct WorkflowNode {
-    pub id: Vec<u8>,
-    pub adapter_id: Vec<u8>,
+    pub id: String,
+    pub adapter_id: String,
     pub adapter_type: NodeAdapter,
     pub context: Option<Value>,
     pub repetitions: Option<u32>,
@@ -91,15 +91,15 @@ impl WorkflowNode {
 
 #[derive(Debug, Clone)]
 pub struct LinkTarget {
-    pub true_target_id: Vec<u8>,
-    pub false_target_id: Vec<u8>,
-    pub generated_target_id: Option<Vec<u8>>,
+    pub true_target_id: String,
+    pub false_target_id: String,
+    pub generated_target_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct WorkflowLink {
-    pub id: Vec<u8>,
-    pub adapter_id: Vec<u8>,
+    pub id: String,
+    pub adapter_id: String,
     pub adapter_type: LinkAdapter,
     pub repetitions: Option<u32>,
     pub context: Option<Value>,
@@ -127,7 +127,7 @@ impl WorkflowLink {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModifyWorkflow {
-    pub id: Vec<u8>,
+    pub id: String,
     pub metadata: String,
     pub encrypted: bool,
 }
@@ -135,7 +135,7 @@ pub struct ModifyWorkflow {
 impl Tokenize for ModifyWorkflow {
     fn into_tokens(self) -> Vec<Token> {
         vec![
-            Token::Bytes(self.id),
+            Token::String(self.id),
             Token::String(self.metadata),
             Token::Bool(self.encrypted),
         ]
@@ -145,7 +145,7 @@ impl Tokenize for ModifyWorkflow {
 impl Workflow {
     pub fn add_node(
         &mut self,
-        adapter_id: Vec<u8>,
+        adapter_id: String,
         adapter_type: NodeAdapter,
         repetitions: Option<u32>,
         context: Option<Value>,
@@ -172,7 +172,7 @@ impl Workflow {
 
     pub fn add_link(
         &mut self,
-        adapter_id: Vec<u8>,
+        adapter_id: String,
         adapter_type: LinkAdapter,
         repetitions: Option<u32>,
         context: Option<Value>,
@@ -501,9 +501,9 @@ impl Workflow {
         })
     }
 
-    fn topological_sort(&self) -> Result<Vec<Vec<u8>>, String> {
-        let mut in_degree: HashMap<Vec<u8>, usize> = HashMap::new();
-        let mut graph: HashMap<Vec<u8>, Vec<Vec<u8>>> = HashMap::new();
+    fn topological_sort(&self) -> Result<Vec<String>, String> {
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
 
         for node in self.nodes.values() {
             in_degree.insert(node.id.clone(), 0);
@@ -518,13 +518,13 @@ impl Workflow {
             *in_degree.entry(link.id.clone()).or_default() += 1;
         }
 
-        let mut stack: Vec<Vec<u8>> = in_degree
+        let mut stack: Vec<String> = in_degree
             .iter()
             .filter(|(_, &deg)| deg == 0)
             .map(|(id, _)| id.clone())
             .collect();
 
-        let mut sorted: Vec<Vec<u8>> = Vec::new();
+        let mut sorted: Vec<String> = Vec::new();
 
         while let Some(current) = stack.pop() {
             sorted.push(current.clone());
@@ -647,14 +647,12 @@ impl Workflow {
                             if let Some(agent_id) = wallet_name.as_str() {
                                 let agent_wallet = self.nodes.values().find_map(|node| {
                                     if let NodeAdapter::Agent = node.adapter_type {
-                                        if node.adapter_id == agent_id.as_bytes().to_vec() {
+                                        if node.adapter_id == agent_id {
                                             Some(
                                                 self.nibble_context
                                                     .agents
                                                     .iter()
-                                                    .find(|agent| {
-                                                        agent.id == agent_id.as_bytes().to_vec()
-                                                    })?
+                                                    .find(|agent| agent.id == agent_id)?
                                                     .wallet
                                                     .clone(),
                                             )
@@ -1363,12 +1361,8 @@ impl Workflow {
                         .context
                         .as_ref()
                         .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_u64().map(|n| n as u8))
-                                .collect::<Vec<u8>>()
-                        })
-                        .unwrap_or_else(Vec::new);
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<String>())
+                        .unwrap_or_else(String::new);
 
                     let flow_previous_context = self
                         .execution_history
@@ -1384,7 +1378,7 @@ impl Workflow {
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let executed_ids: Vec<Vec<u8>> = self
+                    let executed_ids: Vec<String> = self
                         .execution_history
                         .iter()
                         .map(|entry| entry.element_id.clone())
@@ -1427,7 +1421,7 @@ impl Workflow {
                     {
                         Ok(response) => {
                             if let Some(target) = &link.target {
-                                let mut next_node_id: &Vec<u8> = &Vec::new();
+                                let mut next_node_id: &String = &String::new();
 
                                 if let Some(response_value) = response.as_bool() {
                                     next_node_id = if response_value {

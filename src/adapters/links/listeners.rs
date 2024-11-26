@@ -18,7 +18,7 @@ use tokio::{
 #[derive(Debug, Clone)]
 pub struct Listener {
     pub name: String,
-    pub id: Vec<u8>,
+    pub id: String,
     pub listener_type: ListenerType,
     pub encrypted: bool,
 }
@@ -62,7 +62,7 @@ impl Adaptable for Listener {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }

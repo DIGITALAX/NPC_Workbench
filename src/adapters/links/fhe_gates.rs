@@ -15,7 +15,7 @@ use tfhe::{generate_keys, prelude::*, ClientKey, ConfigBuilder, FheUint8, Server
 #[derive(Debug, Clone)]
 pub struct FHEGate {
     pub name: String,
-    pub id: Vec<u8>,
+    pub id: String,
     pub key: String,
     pub encrypted: bool,
     pub contract_address: H160,
@@ -48,7 +48,7 @@ impl Adaptable for FHEGate {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }

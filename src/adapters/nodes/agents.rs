@@ -108,7 +108,7 @@ impl TryFrom<&Value> for Objective {
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub name: String,
-    pub id: Vec<u8>,
+    pub id: String,
     pub role: String,
     pub personality: String,
     pub system: String,
@@ -166,7 +166,7 @@ impl Adaptable for Agent {
     fn name(&self) -> &str {
         &self.name
     }
-    fn id(&self) -> &Vec<u8> {
+    fn id(&self) -> &str {
         &self.id
     }
 }
